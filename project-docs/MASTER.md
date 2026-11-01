@@ -18,4 +18,4 @@ https://app.galaxy.ai/chat
 
 ## Repos
 - Frontend (this repo): https://github.com/chetanpatel003/agent-chat-frontend (private)
-- Backend: https://github.com/chetanpatel003/agent-chat-backend (private) — owns DATABASE.md, API_CONTRACTS.md, TOOL_REGISTRY.md, decisions/.
+- Backend: https://github.com/chetanpatel003/agent-chat-backend (private) — owns DATABASE.md, TOOL_REGISTRY.md, decisions/, and is the source-of-truth half of API_CONTRACTS.md. This repo's own `API_CONTRACTS.md` (added checkpoint 1.4) documents the consuming side: typed service modules, hooks, cache strategy.

@@ -3,25 +3,33 @@
 Full chronological narrative: `~/Desktop/chat/progress.md` (workspace-level, not currently git-tracked anywhere — flagged in backend's PROJECT_STATE.md).
 
 ## Day / hour
-Day 1 of 3. Backend checkpoints 1.1, 1.2 and 1.3 complete. This repo: no new frontend code in 1.3 (chat UI explicitly out of scope) — only a contract re-sync.
+Day 1 of 3. **Phase 1 complete** — all 4 checkpoints done in both repos.
 
 ## Environment — verified
 Clerk keys match backend's. `NEXT_PUBLIC_API_URL=http://localhost:3001` set.
 
 ## Implemented (checkpoint 1.2)
 - `middleware.ts` — `clerkMiddleware()`, standard App Router matcher.
-- `src/app/providers.tsx` — `ClerkProvider` + `QueryClientProvider`, wired into `src/app/layout.tsx`. Full query-key/retry conventions deferred to checkpoint 1.4.
-- `scripts/sync-contracts.mjs` — copies the backend's `src/contracts/*` (sibling repo checkout) into `src/lib/api/contracts/`, rewriting the one Prisma-enum import. **Committed, not gitignored** — Vercel's build has no access to the sibling backend repo, so the synced output must ship with this repo; re-run manually and commit after a backend contract change.
+- `src/app/providers.tsx` — `ClerkProvider` + `QueryClientProvider`, wired into `src/app/layout.tsx`.
+- `scripts/sync-contracts.mjs` — copies the backend's `src/contracts/*` (sibling repo checkout) into `src/lib/api/contracts/`. **Committed, not gitignored** — Vercel's build has no access to the sibling backend repo.
 - `src/lib/api/client.ts` — the one `fetch()` call site (`apiFetch`), Clerk-token header, Zod-validated error parsing.
-- `src/lib/api/me.ts`, `src/hooks/use-me.ts` — demonstrates the full chain (Clerk token → typed client → Zod validation → TanStack Query) without building any chat UI, per checkpoint 1.2's explicit exclusion.
-- No screens yet. No chat UI — excluded through checkpoint 1.3.
+- `src/lib/api/me.ts`, `src/hooks/use-me.ts`.
 
 ## Checkpoint 1.3
-Backend's cursor contract changed (`createdAt` → `sortKey` in the cursor payload; `chat.ts` gained `ListChatsQuerySchema`; `message.ts`'s paginated response gained an `olderCursor` field in place of `nextCursor`) — genuinely changed, so re-synced: `pnpm sync:contracts`, confirmed via `pnpm typecheck && pnpm lint && pnpm test` (all pass, 3/3 — nothing in this repo references the changed fields yet). No other frontend code this checkpoint.
+Contract re-sync only (backend's cursor field rename + new schemas) — no new frontend code, confirmed clean.
+
+## Implemented (checkpoint 1.4) — frontend integration complete
+- **Service modules:** `src/lib/api/chats.ts`, `messages.ts`, `credits.ts` — full typed coverage of every checkpoint 1.3 endpoint.
+- **Query hooks:** `useChats` (list + search, infinite), `useChat`, `useMessages` (infinite, `olderCursor`-driven), `useCreditBalance`, `useCreditLedger` (infinite).
+- **Mutation hooks:** `useCreateChat`, `useUpdateChatTitle`, `useTogglePinChat`, `useDeleteChat` — each with a deliberately chosen cache strategy (patch-in-place vs. invalidate, depending on whether the change affects list order). See API_CONTRACTS.md.
+- **Retry policy:** `providers.tsx`'s `QueryClient` never retries a 401/403.
+- **Testing infra added:** `@vitejs/plugin-react` registered in `vitest.config.mts`; `src/test-utils/query-wrapper.tsx`; per-file `// @vitest-environment jsdom` opt-in for hook tests.
+- 19 new tests (22 total, up from 3). `pnpm build` (production) verified passing.
+- Still no `src/components/` or chat UI — explicitly out of scope through this checkpoint.
 
 ## Next task if resuming cold
-1. Read this file + MASTER.md.
-2. Check backend repo's PROJECT_STATE.md for what contracts/routes actually exist before building anything new that depends on them.
-3. `git status` + `git log --oneline` here.
-4. If the backend's contracts changed since last sync: `pnpm sync:contracts` (requires the backend repo checked out as a sibling directory), then `pnpm typecheck && pnpm test`, and commit the result.
-5. Wait for checkpoint 1.4 instructions before building chat UI.
+1. Read this file + MASTER.md + API_CONTRACTS.md + ARCHITECTURE.md (testing-note section — a known RTL/React-19 quirk and its fix, relevant to any new hook test).
+2. Check backend repo's PROJECT_STATE.md for what's actually implemented before building UI on top of it.
+3. `git status` + `git log --oneline` here. Checkpoint 1.4's changes are staged, not committed, same pattern as every prior checkpoint.
+4. `pnpm test` to re-confirm 22/22 still pass.
+5. **Phase 1 is done** — the next work is chat workspace UI and/or Phase 2 (agent execution), per whatever the user specifies next.
