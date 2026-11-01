@@ -4,11 +4,14 @@
 
 import { z } from "zod";
 
-// Opaque cursor: base64url(JSON.stringify({ createdAt, id })). Callers never
+// Opaque cursor: base64url(JSON.stringify({ sortKey, id })). Callers never
 // construct or parse this themselves — it's a token, not a structured input.
-// Validated as "any non-empty string decodable by the service layer"; the
-// service layer rejects a cursor that doesn't decode or doesn't match the
-// expected shape with a 400, not a 500.
+// `sortKey` is the ISO value of whatever column a given list orders by
+// (Message/CreditLedger: createdAt; Chat: lastMessageAt) — one codec for
+// every (sortColumn, id) keyset-paginated list, not three near-identical
+// ones. Validated as "any non-empty string decodable by the service
+// layer"; the service layer rejects a cursor that doesn't decode or
+// doesn't match the expected shape with a 400, not a 500.
 export const CursorPaginationRequestSchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -26,9 +29,9 @@ export function cursorPaginationResponse<T extends z.ZodTypeAny>(item: T) {
 }
 
 /** Encode/decode the opaque cursor. Shared so request and response sides,
- * and every service that paginates by (createdAt, id), agree on the format. */
+ * and every service that paginates by (sortKey, id), agree on the format. */
 export const CursorPayloadSchema = z.object({
-  createdAt: z.iso.datetime(),
+  sortKey: z.iso.datetime(),
   id: z.uuid(),
 });
 export type CursorPayload = z.infer<typeof CursorPayloadSchema>;

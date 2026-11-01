@@ -5,7 +5,6 @@
 import { z } from "zod";
 import { enumSchema } from "./enum-schema";
 import { MessageRole, MessageStatus } from "./prisma-enums";
-import { cursorPaginationResponse } from "./pagination";
 import { ToolInvocationStatusSchema } from "./agent-run";
 
 // Derive the Zod enum from Prisma's generated const object — one source of
@@ -96,9 +95,18 @@ export const MessageResponseSchema = z.object({
 });
 export type MessageResponse = z.infer<typeof MessageResponseSchema>;
 
-export const PaginatedMessageResponseSchema = cursorPaginationResponse(
-  MessageResponseSchema,
-);
+// Bespoke, not the generic cursorPaginationResponse(): a message page is
+// bidirectional in a way a chat/ledger page isn't — `items` is always in
+// chronological (oldest-first) order regardless of pagination direction,
+// and the one cursor a client ever asks for is explicitly "older than
+// this page's oldest item", never "newer". Naming the field olderCursor
+// instead of the generic nextCursor is what the checkpoint calls making
+// the direction unambiguous from the contract itself, not just a comment.
+export const PaginatedMessageResponseSchema = z.object({
+  items: z.array(MessageResponseSchema),
+  olderCursor: z.string().nullable(),
+  hasMore: z.boolean(),
+});
 export type PaginatedMessageResponse = z.infer<
   typeof PaginatedMessageResponseSchema
 >;
