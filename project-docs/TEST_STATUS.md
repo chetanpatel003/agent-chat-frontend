@@ -2,7 +2,7 @@
 
 | Check | Last run | Result |
 |---|---|---|
-| `pnpm typecheck` | scaffold | PASS |
-| `pnpm test` (Vitest+RTL+MSW) | — | not yet run, no tests written |
-| `pnpm test:e2e` (Playwright) | — | not yet run, browsers not installed |
-| `pnpm lint` | — | not yet run |
+| `pnpm typecheck` | checkpoint 1.2 | PASS |
+| `pnpm lint` | checkpoint 1.2 | PASS (no issues) |
+| `pnpm test` (Vitest+MSW) | checkpoint 1.2 | **PASS — 3/3** (`src/lib/api/client.test.ts`: attaches bearer token, parses error envelope into `ApiError`, refuses to call without a token) |
+| `pnpm test:e2e` (Playwright) | — | not yet run, browsers not installed, no UI to test yet |
