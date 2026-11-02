@@ -18,6 +18,9 @@ type ApiFetchOptions = {
    * this module never imports a Clerk hook itself, so it stays usable
    * from both client and server call sites. */
   token: string | null;
+  /** Extra headers beyond Authorization/Content-Type — e.g. the
+   * required Idempotency-Key on message admission. */
+  headers?: Record<string, string>;
 };
 
 /**
@@ -28,7 +31,7 @@ type ApiFetchOptions = {
  */
 export async function apiFetch<T>(
   path: string,
-  { method = "GET", body, token }: ApiFetchOptions,
+  { method = "GET", body, token, headers }: ApiFetchOptions,
 ): Promise<T> {
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
   if (!API_BASE_URL) {
@@ -43,6 +46,7 @@ export async function apiFetch<T>(
     headers: {
       Authorization: `Bearer ${token}`,
       ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
   });

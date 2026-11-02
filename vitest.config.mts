@@ -11,6 +11,7 @@ export default defineConfig({
     // switching every test (including the plain service/contract tests)
     // to jsdom globally.
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    setupFiles: ["./src/test-utils/setup-dom.ts"],
   },
   resolve: {
     alias: {

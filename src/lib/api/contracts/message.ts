@@ -110,3 +110,19 @@ export const PaginatedMessageResponseSchema = z.object({
 export type PaginatedMessageResponse = z.infer<
   typeof PaginatedMessageResponseSchema
 >;
+
+// Phase 2's minimum: plain text only. Attachments are out of scope
+// (Transloadit/Uppy uploads aren't built yet) — this contract gets
+// extended, not replaced, when they are.
+export const SendMessageRequestSchema = z.object({
+  text: z.string().trim().min(1).max(8000),
+});
+export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
+
+export const SendMessageResponseSchema = z.object({
+  chatId: z.uuid(),
+  messageId: z.uuid(),
+  runId: z.uuid(),
+  triggerRunId: z.string(),
+});
+export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
