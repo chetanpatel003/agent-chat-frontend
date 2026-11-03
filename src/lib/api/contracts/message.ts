@@ -6,6 +6,7 @@ import { z } from "zod";
 import { enumSchema } from "./enum-schema";
 import { MessageRole, MessageStatus } from "./prisma-enums";
 import { ToolInvocationStatusSchema } from "./agent-run";
+import { AttachmentResponseSchema, MAX_ATTACHMENTS_PER_MESSAGE } from "./attachment";
 
 // Derive the Zod enum from Prisma's generated const object — one source of
 // truth for the allowed values, no duplicated domain literals.
@@ -91,6 +92,12 @@ export const MessageResponseSchema = z.object({
   role: MessageRoleSchema,
   status: MessageStatusSchema,
   content: MessageContentSchema,
+  /** User-uploaded media attached to this message, in attachment order. */
+  attachments: z.array(AttachmentResponseSchema),
+  /** Assistant only: total model thinking time across the turn (timing, never reasoning). */
+  thinkingMs: z.number().int().nonnegative().nullable(),
+  /** Assistant turns that ended early (FAILED/CANCELLED, or PENDING with an ended run): the run's user-safe reason. */
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
   createdAt: z.iso.datetime(),
 });
 export type MessageResponse = z.infer<typeof MessageResponseSchema>;
@@ -111,11 +118,19 @@ export type PaginatedMessageResponse = z.infer<
   typeof PaginatedMessageResponseSchema
 >;
 
-// Phase 2's minimum: plain text only. Attachments are out of scope
-// (Transloadit/Uppy uploads aren't built yet) — this contract gets
-// extended, not replaced, when they are.
+// `attachmentIds` order is the attachment order. Each must be the
+// caller's own READY, unattached upload (enforced in send-turn).
 export const SendMessageRequestSchema = z.object({
   text: z.string().trim().min(1).max(8000),
+  attachmentIds: z
+    .array(z.uuid())
+    .max(MAX_ATTACHMENTS_PER_MESSAGE)
+    .refine((ids) => new Set(ids).size === ids.length, "Duplicate attachment id")
+    .default([]),
+  /** Propose a plan and wait for approval before using tools. */
+  planMode: z.boolean().default(false),
+  /** Interrupt: the chat's active run, cancelled atomically with this send's admission. */
+  interruptRunId: z.uuid().optional(),
 });
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
 

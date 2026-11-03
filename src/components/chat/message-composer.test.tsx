@@ -56,9 +56,10 @@ describe("MessageComposer", () => {
     await user.type(screen.getByLabelText("Message"), "hello world");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue(""));
-    expect(capturedKey).toBeTruthy();
-    expect(capturedBody).toEqual({ text: "hello world" });
+    // Optimistic: the composer clears at once, before admission completes.
+    expect(screen.getByLabelText("Message")).toHaveValue("");
+    await waitFor(() => expect(capturedKey).toBeTruthy());
+    expect(capturedBody).toEqual({ text: "hello world", attachmentIds: [], planMode: false });
   });
 
   it("prevents a duplicate submission while one is already in flight", async () => {
@@ -107,14 +108,12 @@ describe("MessageComposer", () => {
     await user.type(screen.getByLabelText("Message"), "retry me");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    await screen.findByText("Could not send that message.");
-    // The draft text must still be there — it was never cleared.
+    await screen.findByText("Could not send that message. Your draft is restored.");
+    // The draft (cleared optimistically on send) is restored after the failure.
     expect(screen.getByLabelText("Message")).toHaveValue("retry me");
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue(""));
-
-    expect(capturedKeys).toHaveLength(2);
+    await waitFor(() => expect(capturedKeys).toHaveLength(2));
     expect(capturedKeys[0]).toBeTruthy();
     expect(capturedKeys[0]).toBe(capturedKeys[1]); // same key, same unchanged request
   });
@@ -140,15 +139,13 @@ describe("MessageComposer", () => {
     render(<MessageComposer chatId={CHAT_ID} />, { wrapper: createWrapper() });
     await user.type(screen.getByLabelText("Message"), "first attempt");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await screen.findByText("Could not send that message.");
+    await screen.findByText("Could not send that message. Your draft is restored.");
 
     // Edit the draft instead of clicking Retry — this is a new
     // intentional send, not a retry of the same request.
     await user.type(screen.getByLabelText("Message"), " edited");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(screen.getByLabelText("Message")).toHaveValue(""));
-
-    expect(capturedKeys).toHaveLength(2);
+    await waitFor(() => expect(capturedKeys).toHaveLength(2));
     expect(capturedKeys[0]).not.toBe(capturedKeys[1]);
   });
 

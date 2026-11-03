@@ -45,3 +45,85 @@ Contract re-sync only (backend's cursor field rename + new schemas) — no new f
 3. `git status` + `git log --oneline` here. Checkpoint 3.4.1's changes are uncommitted (not staged either — not yet `git add`ed), per its own explicit "do not commit or push" instruction.
 4. `pnpm test` to re-confirm 41/41 still pass.
 5. Next work: realtime wiring, tool-result/generated-media rendering, and the upload pipeline, per Phase 3.4's proposed scope — or whatever the user specifies next.
+
+
+## UX polish — optimistic send, auto-scroll, credit visibility (2026-11-03)
+- **Optimistic send.** `stores/pending-sends.ts` (Zustand, the first use of the stack's ephemeral-state
+  store) holds just-sent messages; `useSendMessage` adds one in `onMutate`, records the persisted
+  `messageId` on success, awaits the reconciling messages refetch, then drops it. The list hides an
+  admitted entry as soon as the server list contains that id (`visiblePendingSends`), so the two copies
+  never render together. Kept out of the TanStack messages cache on purpose: realtime-triggered
+  refetches replace that cache and would drop an optimistic entry mid-admission. The composer clears
+  at once (the attachment tray hides while pending); on failure the entry is removed, the draft is
+  restored and an actionable reason is shown (409 / 503 / 401 / generic). Idempotency is unchanged:
+  the restored draft has the same signature, so Retry reuses the same `Idempotency-Key`.
+- **Auto-scroll.** `hooks/use-stick-to-bottom.ts`: a "following" ref updated from scroll events
+  (within 80 px of the bottom), a `ResizeObserver` on the content (images/videos loading, streamed
+  text wrapping), a layout effect on a content key (message count, last status/blocks, streamed
+  length, pending count), and an always-scroll when a new send appears. No timers; scrolling never
+  re-renders the conversation. `ScrollArea` gained an optional `viewportRef` prop.
+- **Per-operation credits.** Generated images/videos show `tool_result.creditsCharged` (written at
+  settlement) as e.g. "0.27M credits used", exact value in the tooltip. Null → nothing shown (no zero,
+  no estimate, never the provider's raw `creditUsed`). No token counts are shown or invented.
+- **Header balance.** `components/chat/credit-balance.tsx` in a header that is now shown on desktop
+  too (menu button still mobile-only), via the existing `useCreditBalance` (`CREDIT_BALANCE_KEY`
+  exported). Loading skeleton, retryable compact error. Invalidated on `step`, `tool_completed`,
+  `tool_failed` and terminal `run_status` events, on the REST "run ended" fallback and on Trigger's
+  terminal signal; TanStack's refetch-on-focus picks up later recovery settlements.
+- `lib/credits.ts`: `formatCredits` (exact below 100,000; else millions, "0.27M", as Magica shows) and
+  `exactCredits`.
+- No backend change, no new endpoint, no new dependency, no credit-accounting change.
+- Known limitation: an invocation settled later by the recovery sweep (inline settlement failed) has
+  `creditsCharged: null` in its persisted tool_result block, so its card shows no usage, though the
+  balance and ledger are correct.
+- Browser (desktop, live data, no model or Magica calls): header "9.18M credits" (= ledger 9,178,192);
+  image card "0.27M credits used" (= 273,936 settled); chat opened scrolled to the last message after
+  the image loaded. Optimistic send, failure restore and scroll-up behaviour verified by tests only —
+  a live send would start an OpenRouter request. Mobile not visually verified (tool limitation).
+
+## Fix — media URLs in assistant prose (2026-11-03)
+Root cause and backend fix: see the backend PROJECT_STATE ("Fix — media URLs in assistant prose").
+Frontend: `message-list.tsx` applies the synced `stripMediaReferences` to assistant text blocks and,
+with `{ streaming: true }`, to live-streamed text (which never passes the backend's API mapping; a
+URL still arriving at the end is held back until complete). Images/videos still render only from
+successful tool results, from the same URLs as before; credit usage unchanged. Browser (persisted
+data, no model/Magica calls): the affected chat shows the image card, "0.27M credits used" and the
+prose, with no provider URL, file list or signed URL; the 03:02 reply shows only its prose.
+
+## Single run status + stage labels (2026-11-03)
+**Root cause of the duplicate indicator:** the pending assistant bubble (`PendingBody`) rendered its own
+"Thinking…" whenever it had no text yet — including during tool calls — while the status line rendered
+"Working — Running generate_image…" for the same run. Now the status line is the only active indicator;
+an empty pending bubble shows a silent (aria-hidden) dots placeholder. "Thought for Ns" on finished
+messages is unchanged.
+- `toCurrentStep` (highest seq wins, so late events can't restore older steps) now includes
+  `tool_progress`; a tool step carries `toolInvocationId`, `phase` and the tool's start time.
+- Labels: Thinking… → Generating image… → Waiting for image… (after Magica accepted the job) → Writing…,
+  with elapsed time ("1m 23s") for thinking and the whole tool call. Edit/crop/merge/skill tools have
+  their own labels; unknown tools "Running <name>…". The ticking timer is aria-hidden so the live
+  region announces only stage changes.
+- `isActive` turns false as soon as a terminal `run_status` (or Trigger's terminal signal for the
+  *current* run) arrives, so no stale bar shows while the active-run query catches up.
+- Failures keep their existing actionable messages (persisted run reason on the message). Stop and
+  Interrupt unchanged.
+
+## Credit usage as operation metadata (2026-11-03)
+- One app-generated indicator per billable invocation, directly under its media and before the reply
+  text ("273,936 credits charged"; exact value in the tooltip; screen readers get it when abbreviated).
+  Several images from one invocation → one indicator; separate invocations → separate indicators.
+- `formatCredits`: exact with separators below 1,000,000, then "1.25M" (header balance uses it too).
+- Assistant text (persisted and streamed) goes through the synced `sanitizeAssistantText`.
+- `useMessages` refetches every 30 s while a successful media result from the last 15 min has no
+  settled usage (`awaitsLateSettlement`), so late settlement appears in place, once.
+- `src/lib/media-tools.ts`: the shared list of billable media tools.
+- Browser: the 08:50 image shows "273,936 credits charged" (then labelled "credits used"); its reply no longer says "It used 273936
+  credits." and keeps everything else.
+
+## Terminology: "credits charged" (2026-11-03)
+The media label now reads "273,936 credits charged" / "1.25M credits charged" (tooltip "273,936 credits
+charged"; screen-reader text "(1,250,000 credits charged)" when abbreviated). The value is the settled
+`creditsCharged` — what was taken from the balance — which can be lower than the provider's reported
+usage (`creditsUsed`) when the balance ran out, so "used" was inaccurate. Wording only: formatting,
+one label per tool call, no label before settlement, late-settlement fill-in and refresh, the header
+balance and the model-statement filter are unchanged. Earlier dated entries above quote the label as
+it was then ("credits used").

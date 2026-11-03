@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useMutation,
@@ -28,6 +29,8 @@ export function useChats(opts: { q?: string; limit?: number } = {}) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: isSignedIn === true,
+    // While a new search loads, keep the previous list instead of flashing a skeleton.
+    placeholderData: keepPreviousData,
   });
 }
 

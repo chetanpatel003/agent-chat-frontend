@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } 
 import { randomUUID } from "node:crypto";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("@clerk/nextjs", () => ({ useAuth: vi.fn() }));
+vi.mock("@trigger.dev/react-hooks", () => ({
+  useRealtimeRunWithStreams: vi.fn(() => ({ run: undefined, streams: {}, error: undefined, stop: vi.fn() })),
+}));
 
 import { useAuth } from "@clerk/nextjs";
 import { createWrapper } from "@/test-utils/query-wrapper";
@@ -16,7 +20,14 @@ const API = "http://localhost:3001";
 process.env.NEXT_PUBLIC_API_URL = API;
 
 const mockUseAuth = vi.mocked(useAuth);
-const server = setupServer();
+// Baseline: no active run for any chat, unless a test overrides it for
+// its own chatId — ConversationView now also reads this (checkpoint
+// 3.4.2) to gate the composer while a run is in flight.
+const server = setupServer(
+  http.get(`${API}/api/v1/chats/:chatId/runs/active`, () =>
+    HttpResponse.json({ ok: true, data: null }),
+  ),
+);
 
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 afterEach(() => server.resetHandlers());
@@ -38,6 +49,9 @@ function makeMessage(overrides: Partial<MessageResponse> = {}): MessageResponse 
     role: "USER",
     status: "COMPLETE",
     content: [{ type: "text", text: "hello" }],
+    attachments: [],
+    thinkingMs: null,
+    error: null,
     createdAt: new Date().toISOString(),
     ...overrides,
   };
@@ -105,5 +119,56 @@ describe("ConversationView", () => {
     rerender(<ConversationView chatId={chatB} />);
     expect(await screen.findByText("message in B")).toBeInTheDocument();
     expect(screen.queryByText("message in A")).not.toBeInTheDocument();
+  });
+
+  it("while a run is active, the composer stays usable and sending interrupts that run (server-side, atomically)", async () => {
+    const chatId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date().toISOString();
+    let sentBody: unknown = null;
+    server.use(
+      http.get(`${API}/api/v1/chats/${chatId}/runs/${runId}/realtime-token`, () =>
+        HttpResponse.json({ ok: true, data: { token: "tok_fake" } }),
+      ),
+      http.post(`${API}/api/v1/chats/${chatId}/messages`, async ({ request }) => {
+        sentBody = await request.json();
+        return HttpResponse.json(
+          { ok: true, data: { chatId, messageId: randomUUID(), runId: randomUUID(), triggerRunId: "run_x" } },
+          { status: 202 },
+        );
+      }),
+      http.get(`${API}/api/v1/chats/${chatId}/messages`, () => okMessages([])),
+      http.get(`${API}/api/v1/chats/${chatId}/runs/active`, () =>
+        HttpResponse.json({
+          ok: true,
+          data: {
+            id: runId,
+            chatId,
+            status: "RUNNING",
+            waitingReason: null,
+            model: null,
+            promptTokens: null,
+            completionTokens: null,
+            turnCount: 1,
+            planMode: false,
+            errorCode: null,
+            errorMessage: null,
+            startedAt: now,
+            completedAt: null,
+            createdAt: now,
+            updatedAt: now,
+            triggerRunId: `run_${randomUUID()}`,
+          },
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    render(<ConversationView chatId={chatId} />, { wrapper: createWrapper() });
+    const send = await screen.findByRole("button", { name: "Interrupt and send" });
+    expect(screen.getByLabelText("Message")).toBeEnabled();
+    await user.type(screen.getByLabelText("Message"), "do this instead");
+    await user.click(send);
+    await waitFor(() => expect(sentBody).toEqual({ text: "do this instead", attachmentIds: [], planMode: false, interruptRunId: runId }));
   });
 });
