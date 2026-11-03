@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("@clerk/nextjs", () => ({ useAuth: vi.fn() }));
 const push = vi.fn();
@@ -57,6 +58,31 @@ describe("ChatSidebar", () => {
 
     render(<ChatSidebar selectedChatId={undefined} />, { wrapper: createWrapper() });
     expect(await screen.findByText("Project kickoff")).toBeInTheDocument();
+  });
+
+  it("searches chats by title through the API (debounced) and shows a no-match state", async () => {
+    const all = [makeChat({ title: "Kashmir trip" }), makeChat({ title: "Budget" })];
+    const queries: (string | null)[] = [];
+    server.use(
+      http.get(`${API}/api/v1/chats`, ({ request }) => {
+        const q = new URL(request.url).searchParams.get("q");
+        queries.push(q);
+        const items = q ? all.filter((c) => c.title?.toLowerCase().includes(q.toLowerCase())) : all;
+        return HttpResponse.json({ ok: true, data: { items, nextCursor: null, hasMore: false } });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ChatSidebar selectedChatId={undefined} />, { wrapper: createWrapper() });
+    expect(await screen.findByText("Budget")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("searchbox", { name: "Search chats" }), "kash");
+    await waitFor(() => expect(screen.queryByText("Budget")).not.toBeInTheDocument());
+    expect(screen.getByText("Kashmir trip")).toBeInTheDocument();
+    expect(queries.filter((q) => q !== null)).toEqual(["kash"]); // one request after typing stops
+
+    await user.clear(screen.getByRole("searchbox", { name: "Search chats" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search chats" }), "zzz");
+    expect(await screen.findByText('No chats match "zzz".')).toBeInTheDocument();
   });
 
   it("reflects a null title as a fallback label, not a crash", async () => {

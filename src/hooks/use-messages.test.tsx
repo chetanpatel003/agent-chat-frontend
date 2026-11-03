@@ -40,6 +40,9 @@ function makeMessage(text: string) {
     role: "USER" as const,
     status: "COMPLETE" as const,
     content: [{ type: "text" as const, text }],
+    attachments: [],
+    thinkingMs: null,
+    error: null,
     createdAt: now,
   };
 }

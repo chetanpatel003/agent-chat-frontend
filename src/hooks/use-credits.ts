@@ -4,10 +4,12 @@ import { useAuth } from "@clerk/nextjs";
 import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
 import { getBalance, listLedger } from "@/lib/api/credits";
 
+export const CREDIT_BALANCE_KEY = ["credits", "balance"] as const;
+
 export function useCreditBalance() {
   const { getToken, isSignedIn } = useAuth();
   return useQuery({
-    queryKey: ["credits", "balance"],
+    queryKey: CREDIT_BALANCE_KEY,
     queryFn: async () => getBalance(await getToken()),
     enabled: isSignedIn === true,
   });

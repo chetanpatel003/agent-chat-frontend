@@ -3,13 +3,16 @@
 // Source: agent-chat-backend/src/contracts (see scripts/sync-contracts.mjs)
 
 import { z } from "zod";
-import { AgentRunStatusSchema } from "./agent-run";
+import { AgentRunStatusSchema, WaitpointStatusSchema, WaitpointTypeSchema } from "./agent-run";
 import { MessageStatusSchema } from "./message";
 
-// Backend-internal, published into Trigger.dev run metadata
-// (realtime/publish-run-event.ts), per PHASE2-PLAN.md §Decision B.
-// Nothing in the frontend consumes this yet — that's the later realtime
-// checkpoint. Turn-level events only, no token-level streaming deltas.
+// Published into Trigger.dev run metadata (realtime/publish-run-event.ts),
+// per PHASE2-PLAN.md §Decision B. Consumed by the frontend starting
+// checkpoint 3.4.2 (src/hooks/use-run-activity.ts, agent-chat-frontend)
+// via @trigger.dev/react-hooks' useRealtimeRun, reading this same shape
+// back out of the subscribed run's own metadata. Turn-level events
+// only: token-level assistant text travels on a separate typed realtime
+// stream (contracts/text-stream.ts), never in metadata.
 //
 // Every variant uses z.strictObject(): an extra field is a validation
 // FAILURE, not silently stripped. That is the enforcement mechanism for
@@ -26,7 +29,9 @@ import { MessageStatusSchema } from "./message";
 
 const BaseEventFields = {
   runId: z.uuid(),
-  // Monotonically increasing within one execution — lets a client order
+  // Monotonically increasing per AgentRun, including across Trigger.dev
+  // retry attempts (the emitter resumes after the highest published
+  // seq; see realtime/publish-run-event.ts) — lets a client order
   // events and detect a gap, even though delivery itself isn't ordered
   // or guaranteed (Trigger.dev metadata, not a message queue).
   seq: z.number().int().nonnegative(),
@@ -71,12 +76,59 @@ const ToolFailedEventSchema = z.strictObject({
   errorCode: z.string().optional(),
 });
 
+/** A long-running tool's progress (labels only). `provider_waiting`: the
+ * provider accepted the job (its run id is persisted) and we are now
+ * waiting for its result. */
+export const ToolProgressPhaseSchema = z.enum(["provider_waiting"]);
+export type ToolProgressPhase = z.infer<typeof ToolProgressPhaseSchema>;
+
+const ToolProgressEventSchema = z.strictObject({
+  type: z.literal("tool_progress"),
+  ...BaseEventFields,
+  toolInvocationId: z.uuid(),
+  toolName: z.string(),
+  phase: ToolProgressPhaseSchema,
+});
+
+/** What the agent is doing right now (tool activity has its own tool_* events). Labels only — never model reasoning. */
+export const RunStepSchema = z.enum(["thinking", "responding", "waiting"]);
+export type RunStep = z.infer<typeof RunStepSchema>;
+
+const StepEventSchema = z.strictObject({
+  type: z.literal("step"),
+  ...BaseEventFields,
+  step: RunStepSchema,
+  /** Zero-based model round within the turn. */
+  round: z.number().int().nonnegative(),
+  toolName: z.string().optional(),
+});
+
+/** Time from the start of a model round to its first output (or its response). */
+const ThinkingCompletedEventSchema = z.strictObject({
+  type: z.literal("thinking_completed"),
+  ...BaseEventFields,
+  round: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+});
+
+const WaitpointEventSchema = z.strictObject({
+  type: z.literal("waitpoint"),
+  ...BaseEventFields,
+  waitpointId: z.uuid(),
+  waitpointType: WaitpointTypeSchema,
+  status: WaitpointStatusSchema,
+});
+
 export const RunEventSchema = z.discriminatedUnion("type", [
   RunStatusEventSchema,
   AssistantMessageEventSchema,
   ToolStartedEventSchema,
   ToolCompletedEventSchema,
   ToolFailedEventSchema,
+  ToolProgressEventSchema,
+  StepEventSchema,
+  ThinkingCompletedEventSchema,
+  WaitpointEventSchema,
 ]);
 export type RunEvent = z.infer<typeof RunEventSchema>;
 

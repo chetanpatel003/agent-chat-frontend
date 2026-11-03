@@ -111,7 +111,8 @@ export const AttachmentStatus = {
   PROCESSING: 'PROCESSING',
   READY: 'READY',
   FAILED: 'FAILED',
-  EXPIRED: 'EXPIRED'
+  EXPIRED: 'EXPIRED',
+  CANCELLED: 'CANCELLED'
 } as const
 
 export type AttachmentStatus = (typeof AttachmentStatus)[keyof typeof AttachmentStatus]

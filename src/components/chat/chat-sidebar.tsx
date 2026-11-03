@@ -9,6 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Pin, PinOff, Trash2, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Input } from "@/components/ui/input";
 import type { ChatResponse } from "@/lib/api/contracts";
 
 function ChatRow({ chat, selected }: { chat: ChatResponse; selected: boolean }) {
@@ -58,7 +60,14 @@ function ChatRow({ chat, selected }: { chat: ChatResponse; selected: boolean }) 
 export function ChatSidebar({ selectedChatId }: { selectedChatId: string | undefined }) {
   const { isSignedIn } = useAuth();
   const router = useRouter();
-  const { data, isLoading, isError } = useChats();
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  // Debounced: one request per pause in typing, not per keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => setSearch(query.trim()), 300);
+    return () => clearTimeout(id);
+  }, [query]);
+  const { data, isLoading, isError } = useChats({ q: search || undefined });
   const createChat = useCreateChat();
 
   const chats = data?.pages.flatMap((page) => page.items) ?? [];
@@ -79,6 +88,17 @@ export function ChatSidebar({ selectedChatId }: { selectedChatId: string | undef
         <Plus className="size-4" />
         New chat
       </Button>
+
+      {isSignedIn === true && (
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search chats"
+          aria-label="Search chats"
+          maxLength={200}
+        />
+      )}
 
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-0.5 pr-2">
@@ -104,7 +124,9 @@ export function ChatSidebar({ selectedChatId }: { selectedChatId: string | undef
           ) : isError ? (
             <p className="px-2 py-4 text-sm text-destructive">Could not load chats.</p>
           ) : chats.length === 0 ? (
-            <p className="px-2 py-4 text-sm text-muted-foreground">No chats yet — start one above.</p>
+            <p className="px-2 py-4 text-sm text-muted-foreground">
+              {search ? `No chats match "${search}".` : "No chats yet — start one above."}
+            </p>
           ) : (
             chats.map((chat) => (
               <ChatRow key={chat.id} chat={chat} selected={chat.id === selectedChatId} />
