@@ -148,6 +148,16 @@ export function useRunActivity(chatId: string | undefined) {
     ) {
       void queryClient.invalidateQueries({ queryKey: CREDIT_BALANCE_KEY });
     }
+    // A new chat's title is generated alongside its first turn (backend
+    // generate-chat-title task) and is normally ready by the reply: refresh
+    // the sidebar when the reply lands and when the run ends.
+    if (
+      unseen.some(
+        (e) => e.type === "assistant_message" || (e.type === "run_status" && !NON_TERMINAL_STATUSES.has(e.status)),
+      )
+    ) {
+      void queryClient.invalidateQueries({ queryKey: ["chats"] });
+    }
     if (unseen.some((e) => e.type === "waitpoint")) {
       void queryClient.invalidateQueries({ queryKey: waitpointsKey(chatId, agentRunId) });
     }
@@ -173,6 +183,7 @@ export function useRunActivity(chatId: string | undefined) {
     if (!isTerminal) return;
     void queryClient.invalidateQueries({ queryKey: ["messages", chatId] });
     void queryClient.invalidateQueries({ queryKey: activeRunKey(chatId) });
+    void queryClient.invalidateQueries({ queryKey: ["chats"] });
     void queryClient.invalidateQueries({ queryKey: CREDIT_BALANCE_KEY });
   }, [isTerminal, chatId, queryClient]);
 
