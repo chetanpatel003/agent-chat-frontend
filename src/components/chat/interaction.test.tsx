@@ -45,6 +45,7 @@ function message(overrides: Partial<MessageResponse>): MessageResponse {
     attachments: [],
     thinkingMs: null,
     runDurationMs: null,
+    runQueueMs: null,
     error: null,
     createdAt: now,
     ...overrides,
@@ -217,38 +218,24 @@ describe("RunStatusIndicatorView — status model", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Waiting for your approval");
   });
 
-  it("names the tool stage and counts the whole tool call's elapsed time", () => {
+  it("names the tool's lifecycle phase from its backend display and counts the whole call's elapsed time", () => {
     const inv = randomUUID();
     const since = new Date(Date.now() - 83_000).toISOString();
-    const { rerender } = render(
-      <RunStatusIndicatorView
-        chatId="c"
-        activity={activity({ currentStep: { kind: "tool", toolName: "generate_image", toolInvocationId: inv, phase: "running", since } })}
-      />,
-      { wrapper: createWrapper() },
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(/^Generating image…\s*1m 2[3-4]s$/);
-    rerender(
-      <RunStatusIndicatorView
-        chatId="c"
-        activity={activity({ currentStep: { kind: "tool", toolName: "generate_image", toolInvocationId: inv, phase: "provider_waiting", since } })}
-      />,
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(/^Waiting for image…\s*1m 2[3-4]s$/);
-    rerender(
-      <RunStatusIndicatorView
-        chatId="c"
-        activity={activity({ currentStep: { kind: "tool", toolName: "merge_videos", toolInvocationId: inv, phase: "provider_waiting", since } })}
-      />,
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(/^Waiting for merged video…/);
-    rerender(
-      <RunStatusIndicatorView
-        chatId="c"
-        activity={activity({ currentStep: { kind: "tool", toolName: "some_tool", toolInvocationId: inv, phase: "running", since } })}
-      />,
-    );
-    expect(screen.getByRole("status")).toHaveTextContent(/^Running some_tool…/);
+    const merge = { name: "Merge Videos", activity: "Merging videos with Magica" };
+    const step = (phase: "calling" | "provider_waiting" | "receiving" | "saving", display = merge, toolName = "merge_videos") =>
+      activity({ currentStep: { kind: "tool", since, tools: [{ toolInvocationId: inv, toolName, display, phase, since }] } });
+    const { rerender } = render(<RunStatusIndicatorView chatId="c" activity={step("calling")} />, { wrapper: createWrapper() });
+    expect(screen.getByRole("status")).toHaveTextContent(/^Calling Merge Videos…\s*1m 2[3-4]s$/);
+    rerender(<RunStatusIndicatorView chatId="c" activity={step("provider_waiting")} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Merging videos with Magica…\s*1m 2[3-4]s$/);
+    rerender(<RunStatusIndicatorView chatId="c" activity={step("receiving")} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Receiving result from Merge Videos…/);
+    rerender(<RunStatusIndicatorView chatId="c" activity={step("saving")} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Saving result from Merge Videos…/);
+    // A different tool, same lifecycle, its own wording.
+    rerender(<RunStatusIndicatorView chatId="c" activity={step("provider_waiting", { name: "Crop Image", activity: "Cropping image with Magica" }, "crop_image")} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Cropping image with Magica…/);
+    expect(screen.queryByText(/Waiting for/)).not.toBeInTheDocument();
   });
 
   it("keeps the ticking timer out of the live region (only stage changes are announced)", () => {

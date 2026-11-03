@@ -114,8 +114,9 @@ describe("RunStatusIndicator", () => {
     });
 
     render(<RunStatusIndicator chatId={chatId} />, { wrapper: createWrapper() });
-    // Status model: a running tool is named by its stage, with its elapsed time.
-    expect(await screen.findByRole("status")).toHaveTextContent(/^Generating image…\s*\d+s$/);
+    // Status model: a running tool is named by its lifecycle phase, with its elapsed time
+    // (no display on this event, so the neutral name derived from the tool name).
+    expect(await screen.findByRole("status")).toHaveTextContent(/^Calling Generate image…\s*\d+s$/);
     expect(screen.getByRole("button", { name: /stop/i })).toBeInTheDocument();
   });
 

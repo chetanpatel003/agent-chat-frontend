@@ -27,6 +27,7 @@ function message(opts: { tool?: string; status?: "COMPLETED" | "FAILED"; charged
     attachments: [],
     thinkingMs: null,
     runDurationMs: null,
+    runQueueMs: null,
     error: null,
     createdAt: new Date(NOW - (opts.ageMs ?? 60_000)).toISOString(),
   };

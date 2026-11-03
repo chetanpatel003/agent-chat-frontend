@@ -11,6 +11,7 @@ import { AssistantMarkdown } from "./assistant-markdown";
 import { libraryName } from "@/hooks/use-composer-attachments";
 import { exactCredits, formatCredits } from "@/lib/credits";
 import { formatDurationMs } from "@/lib/durations";
+import { fallbackToolDisplay } from "@/lib/tool-display";
 import type { PendingSend } from "@/stores/pending-sends";
 
 type AttachmentChip = { id: string; name: string; kind: "image" | "video" };
@@ -137,15 +138,6 @@ function segments(message: MessageResponse): Segment[] {
 /** Live view of the in-flight assistant message (transport only). */
 export type LiveTurn = { text: LiveText | null };
 
-/** Past-tense labels for a finished tool call (execution history, never content). */
-const DONE_TOOL_LABELS: Record<string, string> = {
-  generate_image: "Generated image",
-  edit_image: "Edited image",
-  crop_image: "Cropped image",
-  merge_videos: "Merged videos",
-  load_skill: "Loaded skill",
-  read_skill_asset: "Read skill guide",
-};
 
 type ToolStep = { key: string; label: string; outcome: "done" | "failed" | "stopped"; duration: string | null };
 
@@ -163,7 +155,8 @@ function toolSteps(message: MessageResponse): ToolStep[] {
     return [
       {
         key: block.toolInvocationId,
-        label: DONE_TOOL_LABELS[block.toolName] ?? `Ran ${block.toolName}`,
+        // The backend's display name (same source as the live status), else one derived from the tool name.
+        label: block.displayName ?? fallbackToolDisplay(block.toolName).name,
         outcome,
         duration: formatDurationMs(result?.durationMs),
       },
@@ -173,6 +166,7 @@ function toolSteps(message: MessageResponse): ToolStep[] {
 
 /**
  * A finished assistant turn's execution details, shown above its answer:
+ * queue time ("Queued", run admission → execution start, shown from 1 s),
  * model thinking time ("Thought for", OpenRouter time to first output only),
  * the whole turn's measured duration ("Took", run admission → completion,
  * which includes tool calls such as a multi-minute merge), and each tool call
@@ -180,17 +174,24 @@ function toolSteps(message: MessageResponse): ToolStep[] {
  * shown; a missing or invalid one is omitted, never estimated.
  */
 function RunSummary({ message }: { message: MessageResponse }) {
+  const queued = message.runQueueMs !== null && message.runQueueMs >= 1_000 ? formatDurationMs(message.runQueueMs) : null;
   const thought = message.thinkingMs !== null && message.thinkingMs > 0 ? formatDurationMs(message.thinkingMs) : null;
   const took = formatDurationMs(message.runDurationMs);
   const steps = toolSteps(message);
-  if (!thought && !took && steps.length === 0) return null;
+  const timings = [queued && `Queued ${queued}`, thought && `Thought for ${thought}`, took && `Took ${took}`].filter(
+    (t): t is string => !!t,
+  );
+  if (timings.length === 0 && steps.length === 0) return null;
   return (
     <div data-run-summary="" className="flex flex-col gap-0.5 text-xs text-muted-foreground">
-      {(thought || took) && (
+      {timings.length > 0 && (
         <p className="flex flex-wrap items-center gap-1.5 tabular-nums">
-          {thought && <span>Thought for {thought}</span>}
-          {thought && took && <span aria-hidden="true">·</span>}
-          {took && <span>Took {took}</span>}
+          {timings.map((t, i) => (
+            <span key={t} className="contents">
+              {i > 0 && <span aria-hidden="true">·</span>}
+              <span>{t}</span>
+            </span>
+          ))}
         </p>
       )}
       {steps.length > 0 && (

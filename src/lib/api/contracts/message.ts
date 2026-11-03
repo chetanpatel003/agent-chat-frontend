@@ -35,6 +35,8 @@ const ToolUseBlockSchema = z.object({
   type: z.literal("tool_use"),
   toolInvocationId: z.uuid(),
   toolName: z.string(),
+  /** Response only: the tool's user-facing name (src/tools/display.ts), added on read. */
+  displayName: z.string().min(1).max(60).optional(),
   status: ToolInvocationStatusSchema,
   input: z.record(z.string(), z.unknown()),
 });
@@ -103,6 +105,12 @@ export const MessageResponseSchema = z.object({
    * client parsing an older server's response still works.
    */
   runDurationMs: z.number().int().nonnegative().nullable().default(null),
+  /**
+   * Assistant only: how long the run waited before execution started (run
+   * admission → `startedAt`). Null when not measurable. Defaults to null for
+   * older servers.
+   */
+  runQueueMs: z.number().int().nonnegative().nullable().default(null),
   /** Assistant turns that ended early (FAILED/CANCELLED, or PENDING with an ended run): the run's user-safe reason. */
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
   createdAt: z.iso.datetime(),

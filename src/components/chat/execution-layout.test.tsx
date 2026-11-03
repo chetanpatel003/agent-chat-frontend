@@ -25,6 +25,7 @@ function message(overrides: Partial<MessageResponse>): MessageResponse {
     attachments: [],
     thinkingMs: null,
     runDurationMs: null,
+    runQueueMs: null,
     error: null,
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -35,7 +36,7 @@ const userMsg = message({ role: "USER", content: [{ type: "text", text: "Merge m
 const status = (label: string): RunStatusSlot => ({ runId, node: <span role="status">{label}</span> });
 
 const mergeUse = (status: "RUNNING" | "COMPLETED") =>
-  ({ type: "tool_use", toolInvocationId: mergeId, toolName: "merge_videos", status, input: {} }) as const;
+  ({ type: "tool_use", toolInvocationId: mergeId, toolName: "merge_videos", displayName: "Merge Videos", status, input: {} }) as const;
 const mergeResult = (durationMs: number | null) =>
   ({ type: "tool_result", toolInvocationId: mergeId, output: { images: [VIDEO] }, durationMs, creditsCharged: 120, error: null }) as const;
 
@@ -94,7 +95,7 @@ describe("completed response layout", () => {
     expect(summary).not.toBeNull();
     expect(within(summary).getByText("Thought for 4s")).toBeInTheDocument();
     expect(within(summary).getByText("Took 3m 13s")).toBeInTheDocument();
-    expect(within(summary).getByRole("listitem")).toHaveTextContent("Merged videos · 3m 05s");
+    expect(within(summary).getByRole("listitem")).toHaveTextContent("Merge Videos · 3m 05s");
     const answer = screen.getByText("Here is your merged video.");
     expect(before(summary, answer)).toBe(true);
     expect(container.querySelector("video")).not.toBeNull();
@@ -121,7 +122,7 @@ describe("completed response layout", () => {
       error: { code: "TOOL_FAILED", message: "The merge failed." },
     });
     render(<MessageList messages={[failed]} />);
-    expect(screen.getByRole("listitem")).toHaveTextContent("Merged videos — failed · 12s");
+    expect(screen.getByRole("listitem")).toHaveTextContent("Merge Videos — failed · 12s");
   });
 });
 
@@ -134,13 +135,13 @@ describe("durations: long-running tools and missing/invalid timestamps", () => {
     );
     expect(screen.getByText("Thought for 4s")).toBeInTheDocument();
     expect(screen.getByText("Took 30m 05s")).toBeInTheDocument();
-    expect(screen.getByRole("listitem")).toHaveTextContent("Merged videos · 29m 00s");
+    expect(screen.getByRole("listitem")).toHaveTextContent("Merge Videos · 29m 00s");
   });
 
   it("missing durations are omitted, never estimated or shown as zero", () => {
     render(<MessageList messages={[message({ thinkingMs: null, runDurationMs: null, content: [mergeUse("COMPLETED"), mergeResult(null)] })]} />);
     expect(screen.queryByText(/Thought for|Took/)).not.toBeInTheDocument();
-    expect(screen.getByRole("listitem")).toHaveTextContent(/^Merged videos$/);
+    expect(screen.getByRole("listitem")).toHaveTextContent(/^Merge Videos$/);
   });
 
   it("a turn with no timing and no tools shows no execution details at all", () => {

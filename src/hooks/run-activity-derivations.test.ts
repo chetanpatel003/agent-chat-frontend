@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
-import { toCurrentStep, toLiveText } from "./use-run-activity";
+import { parseRunEvents, toCurrentStep, toLiveText } from "./use-run-activity";
 import type { RunEvent } from "@/lib/api/contracts";
 
 const runId = randomUUID();
@@ -34,54 +34,86 @@ describe("toLiveText", () => {
   });
 });
 
-describe("toCurrentStep", () => {
+describe("toCurrentStep — generic tool lifecycle from real events", () => {
   const base = { runId };
-  it("is decided by the highest seq among step and tool events, regardless of array order", () => {
-    const crop = randomUUID();
-    const events: RunEvent[] = [
-      { ...base, type: "tool_started", seq: 4, at: at(4), toolInvocationId: crop, toolName: "crop_image" },
-      { ...base, type: "step", seq: 2, at: at(2), step: "thinking", round: 0 },
-      { ...base, type: "thinking_completed", seq: 3, at: at(3), round: 0, durationMs: 900 },
-      { ...base, type: "run_status", seq: 5, at: at(5), status: "RUNNING" },
-    ];
-    expect(toCurrentStep(events)).toEqual({ kind: "tool", toolName: "crop_image", toolInvocationId: crop, phase: "running", since: at(4) });
+  const merge = { name: "Merge Videos", activity: "Merging videos with Magica" };
+  const started = (seq: number, id: string, toolName = "merge_videos", display: typeof merge | undefined = merge): RunEvent => ({
+    ...base, type: "tool_started", seq, at: at(seq), toolInvocationId: id, toolName, ...(display ? { display } : {}),
+  });
+  const progress = (seq: number, id: string, phase: "provider_waiting" | "receiving" | "saving", toolName = "merge_videos"): RunEvent => ({
+    ...base, type: "tool_progress", seq, at: at(seq), toolInvocationId: id, toolName, phase,
+  });
+  const completed = (seq: number, id: string, toolName = "merge_videos"): RunEvent => ({ ...base, type: "tool_completed", seq, at: at(seq), toolInvocationId: id, toolName });
+  const failed = (seq: number, id: string, toolName = "merge_videos"): RunEvent => ({ ...base, type: "tool_failed", seq, at: at(seq), toolInvocationId: id, toolName, errorCode: "EXECUTION_FAILED" });
+  const step = (seq: number, s: "thinking" | "responding" | "waiting"): RunEvent => ({ ...base, type: "step", seq, at: at(seq), step: s, round: 0 });
+  const running = (seq: number): RunEvent => ({ ...base, type: "run_status", seq, at: at(seq), status: "RUNNING" });
+  const phaseOf = (r: ReturnType<typeof toCurrentStep>) => (r?.kind === "tool" ? r.tools.map((t) => t.phase) : r?.kind);
+
+  it("starting → thinking → calling → activity → receiving → saving → working → next round", () => {
+    const id = randomUUID();
+    const seq: RunEvent[] = [running(1), step(2, "thinking"), started(3, id), progress(4, id, "provider_waiting"), progress(5, id, "receiving"), progress(6, id, "saving"), completed(7, id), step(8, "responding")];
+    const at_ = (n: number) => toCurrentStep(seq.slice(0, n));
+    expect(at_(1)).toEqual({ kind: "starting", since: at(1) });
+    expect(at_(2)).toEqual({ kind: "thinking", since: at(2) });
+    expect(phaseOf(at_(3))).toEqual(["calling"]);
+    expect(phaseOf(at_(4))).toEqual(["provider_waiting"]);
+    expect(phaseOf(at_(5))).toEqual(["receiving"]);
+    expect(phaseOf(at_(6))).toEqual(["saving"]);
+    expect(at_(7)).toEqual({ kind: "working", since: at(7) });
+    expect(at_(8)).toEqual({ kind: "responding", since: at(8) });
+    // Elapsed time always counts from the tool call's own start, whatever the phase.
+    const r = at_(6);
+    expect(r?.kind === "tool" && r.tools[0].since).toBe(at(3));
+    expect(r?.kind === "tool" && r.tools[0].display).toEqual(merge);
   });
 
-  it("thinking → tool running → provider waiting (elapsed still counted from the tool's start) → back to thinking", () => {
-    const inv = randomUUID();
-    const thinking: RunEvent = { ...base, type: "step", seq: 1, at: at(1), step: "thinking", round: 0 };
-    const started: RunEvent = { ...base, type: "tool_started", seq: 2, at: at(2), toolInvocationId: inv, toolName: "generate_image" };
-    const waiting: RunEvent = { ...base, type: "tool_progress", seq: 3, at: at(3), toolInvocationId: inv, toolName: "generate_image", phase: "provider_waiting" };
-    const done: RunEvent = { ...base, type: "tool_completed", seq: 4, at: at(4), toolInvocationId: inv, toolName: "generate_image" };
-    const next: RunEvent = { ...base, type: "step", seq: 5, at: at(5), step: "thinking", round: 1 };
-
-    expect(toCurrentStep([thinking])).toEqual({ kind: "thinking", since: at(1) });
-    expect(toCurrentStep([thinking, started])).toMatchObject({ kind: "tool", phase: "running", since: at(2) });
-    expect(toCurrentStep([thinking, started, waiting])).toMatchObject({ kind: "tool", phase: "provider_waiting", since: at(2) });
-    expect(toCurrentStep([thinking, started, waiting, done])).toEqual({ kind: "working", since: at(4) });
-    expect(toCurrentStep([thinking, started, waiting, done, next])).toEqual({ kind: "thinking", since: at(5) });
+  it("parallel calls: each in flight with its own phase, in start order; finished ones drop out", () => {
+    const [a, b, c] = [randomUUID(), randomUUID(), randomUUID()];
+    const events: RunEvent[] = [step(1, "thinking"), started(2, a, "load_skill"), started(3, b, "read_skill_asset"), started(4, c, "load_skill"), progress(5, b, "receiving", "read_skill_asset"), completed(6, a, "load_skill")];
+    const r = toCurrentStep(events);
+    expect(r?.kind).toBe("tool");
+    expect(r?.kind === "tool" && r.tools.map((t) => [t.toolInvocationId, t.phase])).toEqual([[b, "receiving"], [c, "calling"]]);
+    expect(toCurrentStep([...events, failed(7, b, "read_skill_asset"), completed(8, c, "load_skill")])).toEqual({ kind: "working", since: at(8) });
   });
 
-  it("a late (lower-seq) event never restores an older step", () => {
-    const inv = randomUUID();
-    const started: RunEvent = { ...base, type: "tool_started", seq: 2, at: at(2), toolInvocationId: inv, toolName: "generate_image" };
-    const waiting: RunEvent = { ...base, type: "tool_progress", seq: 3, at: at(3), toolInvocationId: inv, toolName: "generate_image", phase: "provider_waiting" };
-    const done: RunEvent = { ...base, type: "tool_completed", seq: 4, at: at(4), toolInvocationId: inv, toolName: "generate_image" };
-    const next: RunEvent = { ...base, type: "step", seq: 5, at: at(5), step: "responding", round: 1 };
-    // Delivered out of order: the newest step wins whatever arrives last.
-    expect(toCurrentStep([next, done, waiting, started])).toEqual({ kind: "responding", since: at(5) });
-    expect(toCurrentStep([waiting, started])).toMatchObject({ phase: "provider_waiting" });
-    expect(toCurrentStep([done, started])).toEqual({ kind: "working", since: at(4) });
+  it("out-of-order delivery: ordered by seq, a late lower-seq event never restores an older phase", () => {
+    const id = randomUUID();
+    expect(phaseOf(toCurrentStep([progress(5, id, "saving"), started(3, id), progress(4, id, "provider_waiting")]))).toEqual(["saving"]);
+    expect(toCurrentStep([step(9, "responding"), completed(7, id), progress(5, id, "saving"), started(3, id)])).toEqual({ kind: "responding", since: at(9) });
   });
 
-  it("maps step events and finished tools", () => {
-    expect(toCurrentStep([{ ...base, type: "step", seq: 1, at: at(1), step: "waiting", round: 0 }])).toEqual({
-      kind: "waiting",
-      since: at(1),
-    });
-    expect(
-      toCurrentStep([{ ...base, type: "tool_completed", seq: 1, at: at(1), toolInvocationId: randomUUID(), toolName: "x" }]),
-    ).toEqual({ kind: "working", since: at(1) });
+  it("failure: a failed call leaves the in-flight set immediately", () => {
+    const id = randomUUID();
+    expect(toCurrentStep([step(1, "thinking"), started(2, id), progress(3, id, "provider_waiting"), progress(4, id, "receiving"), failed(5, id)])).toEqual({ kind: "working", since: at(5) });
+  });
+
+  it("retry / worker restart: a call stranded by a crashed attempt is not shown once a new attempt starts", () => {
+    const id = randomUUID();
+    const stranded = [step(1, "thinking"), started(2, id), progress(3, id, "provider_waiting")];
+    expect(phaseOf(toCurrentStep(stranded))).toEqual(["provider_waiting"]);
+    expect(toCurrentStep([...stranded, running(4)])).toEqual({ kind: "starting", since: at(4) });
+    expect(toCurrentStep([...stranded, running(4), step(5, "thinking")])).toEqual({ kind: "thinking", since: at(5) });
+  });
+
+  it("events without a display (older server) get a neutral label from the tool name", () => {
+    const id = randomUUID();
+    const noDisplay: RunEvent = { ...base, type: "tool_started", seq: 1, at: at(1), toolInvocationId: id, toolName: "search_web" };
+    const r = toCurrentStep([noDisplay]);
+    expect(r?.kind === "tool" && r.tools[0].display).toEqual({ name: "Search web", activity: "Running search web" });
+  });
+
+  it("non-tool turns and edge cases", () => {
+    expect(toCurrentStep([step(1, "waiting")])).toEqual({ kind: "waiting", since: at(1) });
+    expect(toCurrentStep([completed(1, randomUUID(), "x")])).toEqual({ kind: "working", since: at(1) });
     expect(toCurrentStep([])).toBeNull();
+  });
+});
+
+describe("parseRunEvents", () => {
+  it("drops only the invalid or unknown events, never the whole history", () => {
+    const ok = { runId, type: "step", seq: 1, at: at(1), step: "thinking", round: 0 };
+    const unknownPhase = { runId, type: "tool_progress", seq: 2, at: at(2), toolInvocationId: randomUUID(), toolName: "x", phase: "teleporting" };
+    expect(parseRunEvents([ok, unknownPhase, { garbage: true }]).map((e) => e.seq)).toEqual([1]);
+    expect(parseRunEvents("nope")).toEqual([]);
   });
 });
