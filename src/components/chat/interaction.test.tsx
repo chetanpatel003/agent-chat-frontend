@@ -44,6 +44,7 @@ function message(overrides: Partial<MessageResponse>): MessageResponse {
     content: [],
     attachments: [],
     thinkingMs: null,
+    runDurationMs: null,
     error: null,
     createdAt: now,
     ...overrides,

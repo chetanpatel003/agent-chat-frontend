@@ -42,6 +42,7 @@ function makeMessage(text: string) {
     content: [{ type: "text" as const, text }],
     attachments: [],
     thinkingMs: null,
+    runDurationMs: null,
     error: null,
     createdAt: now,
   };

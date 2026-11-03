@@ -44,7 +44,7 @@ export function ConversationView({ chatId }: { chatId: string | undefined }) {
   const liveLength = activity.liveText?.rounds.reduce((n, t) => n + t.length, 0) ?? 0;
   const { viewportRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>({
     // Anything that adds visible content at the bottom.
-    followKey: `${messages.length}:${last?.id}:${last?.status}:${last?.content.length}:${liveLength}:${pending.length}`,
+    followKey: `${messages.length}:${last?.id}:${last?.status}:${last?.content.length}:${liveLength}:${pending.length}:${activity.isActive}`,
     // A new send always scrolls to it.
     forceKey: pending.at(-1)?.localId,
   });
@@ -96,13 +96,21 @@ export function ConversationView({ chatId }: { chatId: string | undefined }) {
                   {isFetchingNextPage ? "Loading…" : "Load older messages"}
                 </Button>
               )}
-              <MessageList messages={messages} live={{ text: activity.liveText }} pending={pending} />
+              <MessageList
+                messages={messages}
+                live={{ text: activity.liveText }}
+                pending={pending}
+                runStatus={
+                  activity.isActive && activity.activeRun
+                    ? { runId: activity.activeRun.id, node: <RunStatusIndicatorView chatId={chatId} activity={activity} /> }
+                    : null
+                }
+              />
             </>
           )}
         </div>
       </ScrollArea>
       <WaitpointCard chatId={chatId} activity={activity} />
-      <RunStatusIndicatorView chatId={chatId} activity={activity} />
       <MessageComposer chatId={chatId} disabled={isSignedIn !== true} activeRunId={activity.activeRun?.id ?? null} />
     </div>
   );

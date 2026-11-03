@@ -96,6 +96,13 @@ export const MessageResponseSchema = z.object({
   attachments: z.array(AttachmentResponseSchema),
   /** Assistant only: total model thinking time across the turn (timing, never reasoning). */
   thinkingMs: z.number().int().nonnegative().nullable(),
+  /**
+   * Assistant only: the finished turn's measured duration, run admission to
+   * completion (includes tool calls and waits). Null while active or when the
+   * timestamps are missing/invalid — never an estimate. Defaults to null so a
+   * client parsing an older server's response still works.
+   */
+  runDurationMs: z.number().int().nonnegative().nullable().default(null),
   /** Assistant turns that ended early (FAILED/CANCELLED, or PENDING with an ended run): the run's user-safe reason. */
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
   createdAt: z.iso.datetime(),

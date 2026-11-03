@@ -47,6 +47,7 @@ function message(chatId: string, text: string, overrides: Partial<MessageRespons
     content: [{ type: "text", text }],
     attachments: [],
     thinkingMs: null,
+    runDurationMs: null,
     error: null,
     createdAt: new Date().toISOString(),
     ...overrides,
