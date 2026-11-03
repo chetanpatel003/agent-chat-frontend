@@ -54,30 +54,44 @@ function isSafeImageUrl(value: unknown): value is string {
   }
 }
 
-function stringArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
+/** Legacy raw fields per tool, for rows persisted before the backend wrote canonical `images`. */
+const RAW_FALLBACK_FIELDS: Record<string, readonly string[]> = {
+  generate_image: ["result"],
+  edit_image: ["result"],
+  crop_image: ["image_url", "result"],
+  merge_videos: ["video_url", "result"],
+};
+
+/**
+ * Provider URLs from a persisted Magica tool output `{ raw, images?, creditUsed? }`:
+ * the backend's canonical `images` (tools/magica-output.ts — the same list
+ * archival uses), else the tool's raw field for older rows. Only https.
+ */
+function providerUrls(toolName: string, output: Record<string, unknown> | null): string[] {
+  if (!output) return [];
+  if (Array.isArray(output.images)) return output.images.filter(isSafeImageUrl);
+  const raw = output.raw && typeof output.raw === "object" ? (output.raw as Record<string, unknown>) : null;
+  for (const field of RAW_FALLBACK_FIELDS[toolName] ?? []) {
+    const value = raw?.[field];
+    const urls = (Array.isArray(value) ? value : [value]).filter(isSafeImageUrl);
+    if (urls.length > 0) return urls;
+  }
+  return [];
 }
 
 /**
- * URLs from a persisted Magica tool output: `{ raw, images?, creditUsed? }`
- * where `images` is the backend's normalised copy of `raw.result` (the
- * live-verified Magica field). Anything that isn't a valid https URL is
- * dropped.
+ * M3: each output prefers its archived copy (our B2 object, a fresh signed URL
+ * from the messages API) over the provider's URL, which may expire; the
+ * provider URL is used only for an output that hasn't been archived (yet).
  */
-function imageUrls(output: Record<string, unknown> | null): string[] {
-  if (!output) return [];
-  const raw = output.raw && typeof output.raw === "object" ? (output.raw as Record<string, unknown>) : null;
-  const candidates = Array.isArray(output.images) ? output.images : stringArray(raw?.result);
-  return candidates.filter(isSafeImageUrl);
-}
-
-/** Video URLs from a persisted merge_videos output: normalised `images`
- * (the backend's shared output field), else the raw `video_url`. */
-function videoUrls(output: Record<string, unknown> | null): string[] {
-  if (!output) return [];
-  const raw = output.raw && typeof output.raw === "object" ? (output.raw as Record<string, unknown>) : null;
-  const candidates = Array.isArray(output.images) ? output.images : [raw?.video_url];
-  return candidates.filter(isSafeImageUrl);
+function mediaUrls(message: MessageResponse, toolInvocationId: string, fromProvider: string[]): string[] {
+  const archived = new Map(
+    (message.attachments ?? [])
+      .filter((a) => a.source === "GENERATED" && a.toolInvocationId === toolInvocationId && a.status === "READY" && isSafeImageUrl(a.url))
+      .map((a) => [a.order, a.url as string]),
+  );
+  const count = Math.max(fromProvider.length, ...[...archived.keys()].map((order) => order + 1), 0);
+  return Array.from({ length: count }, (_, i) => archived.get(i) ?? fromProvider[i]).filter((u): u is string => !!u);
 }
 
 /**
@@ -108,10 +122,10 @@ function segments(message: MessageResponse): Segment[] {
     const toolUse = toolUses.get(block.toolInvocationId);
     if (!toolUse || toolUse.status !== "COMPLETED") return;
     if (IMAGE_TOOLS.has(toolUse.toolName)) {
-      const urls = imageUrls(block.output);
+      const urls = mediaUrls(message, block.toolInvocationId, providerUrls(toolUse.toolName, block.output));
       if (urls.length > 0) result.push({ kind: "images", key: `i${index}`, urls, credits: block.creditsCharged });
     } else if (VIDEO_TOOLS.has(toolUse.toolName)) {
-      const urls = videoUrls(block.output);
+      const urls = mediaUrls(message, block.toolInvocationId, providerUrls(toolUse.toolName, block.output));
       if (urls.length > 0) result.push({ kind: "videos", key: `v${index}`, urls, credits: block.creditsCharged });
     }
   });

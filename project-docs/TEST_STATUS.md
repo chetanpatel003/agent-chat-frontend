@@ -96,3 +96,10 @@ images) plus that an ordinary link stays text.
 ## Terminology (2026-11-03) — "credits charged"
 `message-list.test.tsx`: label, tooltip and screen-reader expectations now say "credits charged"
 (14 assertions); no behavioural test changed.
+
+
+## Magica reliability fixes (2026-11-03) — 174/174 (21 files)
+- `message-list.test.tsx` (+9): archived B2 copy preferred; provider fallback (PROCESSING, FAILED,
+  none); per-index mixing; other invocations' copies ignored; crop from canonical/legacy shapes;
+  recovered COMPLETE message shows the result with no "interrupted".
+- `late-settlement.test.ts` (+2): refresh an ended pending turn within 45 min only.

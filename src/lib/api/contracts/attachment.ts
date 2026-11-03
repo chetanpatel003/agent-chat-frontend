@@ -28,6 +28,8 @@ export const AttachmentResponseSchema = z.object({
   url: z.url().nullable(),
   metadata: AttachmentMetadataSchema,
   order: z.number().int().nonnegative(),
+  /** Generated media: the tool invocation that produced it (with `order` = its output index). Null for uploads. */
+  toolInvocationId: z.uuid().nullable().optional(),
   createdAt: z.iso.datetime(),
 });
 export type AttachmentResponse = z.infer<typeof AttachmentResponseSchema>;

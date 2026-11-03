@@ -18,6 +18,9 @@ import { usePendingSends, type PendingSend } from "@/stores/pending-sends";
 /** How long after a turn we keep checking for usage that settles late, and how often. */
 export const LATE_SETTLEMENT_WINDOW_MS = 15 * 60_000;
 export const LATE_SETTLEMENT_POLL_MS = 30_000;
+/** A result can be recovered after its turn stopped tracking it (the billable
+ * sweep acts on runs idle for 15 min, every 10 min): keep checking this long. */
+export const LATE_RESULT_WINDOW_MS = 45 * 60_000;
 
 /**
  * True when a recent assistant turn has a successful media result whose
@@ -28,6 +31,12 @@ export const LATE_SETTLEMENT_POLL_MS = 30_000;
 export function awaitsLateSettlement(pages: PaginatedMessageResponse[] | undefined, now?: number): boolean {
   for (const message of pages?.[0]?.items ?? []) {
     if (message.role !== "ASSISTANT") continue;
+    // A turn whose run ended while it was still pending (interrupted, lost
+    // provider response): its result may still be recovered into this message.
+    if (message.status === "PENDING" && message.error !== null) {
+      if ((now ?? Date.now()) - Date.parse(message.createdAt) <= LATE_RESULT_WINDOW_MS) return true;
+      continue;
+    }
     // The clock is read only when there is a message to check (never while prerendering).
     if ((now ?? Date.now()) - Date.parse(message.createdAt) > LATE_SETTLEMENT_WINDOW_MS) continue;
     const completedMedia = new Set(

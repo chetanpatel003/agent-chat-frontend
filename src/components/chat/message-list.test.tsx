@@ -680,3 +680,72 @@ describe("MessageList — credit usage presentation", () => {
     expect(indicator).toHaveTextContent("(1,250,000 credits charged)");
   });
 });
+
+// Magica reliability fixes (2026-11-03): M3 archived copies, M1 crop shapes, H2 recovered results.
+describe("MessageList — generated media sources", () => {
+  const B2 = "https://s3.us-east-005.backblazeb2.com/agentChat/generated/u/i-0.png?X-Amz-Signature=abc";
+  function generated(toolInvocationId: string, opts: { status?: "READY" | "PROCESSING" | "FAILED"; url?: string | null; order?: number } = {}) {
+    return {
+      id: randomUUID(),
+      messageId: null,
+      source: "GENERATED" as const,
+      status: opts.status ?? ("READY" as const),
+      mimeType: "image/png",
+      sizeBytes: 100,
+      url: opts.url === undefined ? B2 : opts.url,
+      metadata: {},
+      order: opts.order ?? 0,
+      toolInvocationId,
+      createdAt: new Date().toISOString(),
+    };
+  }
+  function withOutput(toolName: string, output: Record<string, unknown> | null, attachments: (id: string) => ReturnType<typeof generated>[]) {
+    const pair = toolPair(toolName, output, { creditsCharged: 5_000 });
+    const id = (pair[0] as { toolInvocationId: string }).toolInvocationId;
+    return makeMessage({ role: "ASSISTANT", content: pair, attachments: attachments(id) });
+  }
+
+  it("prefers the archived B2 copy over the provider URL", () => {
+    render(<MessageList messages={[withOutput("generate_image", magicaOutput([URL_A]), (id) => [generated(id)])]} />);
+    expect(screen.getByRole("img", { name: "Generated image" })).toHaveAttribute("src", B2);
+  });
+
+  it("falls back to the provider URL when the output isn't archived (yet)", () => {
+    for (const fallback of [
+      (id: string) => [generated(id, { status: "PROCESSING", url: null })],
+      (id: string) => [generated(id, { status: "FAILED", url: null })],
+      () => [],
+    ]) {
+      const { unmount } = render(<MessageList messages={[withOutput("generate_image", magicaOutput([URL_A]), fallback)]} />);
+      expect(screen.getByRole("img", { name: "Generated image" })).toHaveAttribute("src", URL_A);
+      unmount();
+    }
+  });
+
+  it("matches archived copies by output index, mixing per output when only some are archived", () => {
+    render(<MessageList messages={[withOutput("generate_image", magicaOutput([URL_A, URL_B]), (id) => [generated(id, { order: 1 })])]} />);
+    expect(screen.getAllByRole("img").map((i) => i.getAttribute("src"))).toEqual([URL_A, B2]);
+  });
+
+  it("never uses another invocation's archived copy", () => {
+    render(<MessageList messages={[withOutput("generate_image", magicaOutput([URL_A]), () => [generated(randomUUID())])]} />);
+    expect(screen.getByRole("img", { name: "Generated image" })).toHaveAttribute("src", URL_A);
+  });
+
+  it.each([
+    ["canonical images", { raw: { image_url: URL_B }, images: [URL_B] }],
+    ["legacy raw.image_url", { raw: { image_url: URL_B } }],
+    ["legacy raw.result", { raw: { result: [URL_B] } }],
+  ])("renders crop_image output from %s", (_label, output) => {
+    render(<MessageList messages={[withOutput("crop_image", output, () => [])]} />);
+    expect(screen.getByRole("img", { name: "Generated image" })).toHaveAttribute("src", URL_B);
+  });
+
+  it("shows a recovered result (COMPLETE, tool blocks only) as a result — no 'interrupted', no 'Thinking'", () => {
+    const recovered = makeMessage({ role: "ASSISTANT", status: "COMPLETE", content: toolPair("generate_image", magicaOutput([URL_A]), { creditsCharged: 273_936 }) });
+    render(<MessageList messages={[recovered]} />);
+    expect(screen.getByRole("img", { name: "Generated image" })).toBeInTheDocument();
+    expect(screen.getByText("273,936 credits charged")).toBeInTheDocument();
+    expect(screen.queryByText(/interrupted|Thinking|no text content/i)).not.toBeInTheDocument();
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "node:crypto";
-import { awaitsLateSettlement, LATE_SETTLEMENT_WINDOW_MS } from "./use-messages";
+import { awaitsLateSettlement, LATE_RESULT_WINDOW_MS, LATE_SETTLEMENT_WINDOW_MS } from "./use-messages";
 import type { MessageResponse, PaginatedMessageResponse } from "@/lib/api/contracts";
 
 const NOW = Date.parse("2026-11-03T09:00:00Z");
@@ -42,5 +42,22 @@ describe("awaitsLateSettlement (refresh until usage settles)", () => {
     expect(awaitsLateSettlement(pages(message({ tool: "load_skill" })), NOW)).toBe(false);
     expect(awaitsLateSettlement(pages(message({ ageMs: LATE_SETTLEMENT_WINDOW_MS + 1 })), NOW)).toBe(false);
     expect(awaitsLateSettlement(undefined, NOW)).toBe(false);
+  });
+});
+
+describe("awaitsLateSettlement — results recovered after the turn ended (H2)", () => {
+  const ended = (ageMs: number): MessageResponse => ({
+    ...message({}),
+    status: "PENDING",
+    content: [],
+    error: { code: "RUN_INTERRUPTED", message: "The execution stopped unexpectedly." },
+    createdAt: new Date(NOW - ageMs).toISOString(),
+  });
+  it("keeps checking an ended, still-pending turn for a bounded window", () => {
+    expect(awaitsLateSettlement(pages(ended(20 * 60_000)), NOW)).toBe(true);
+    expect(awaitsLateSettlement(pages(ended(LATE_RESULT_WINDOW_MS + 1)), NOW)).toBe(false);
+  });
+  it("does not poll for a pending turn whose run is still active (realtime covers it)", () => {
+    expect(awaitsLateSettlement(pages({ ...ended(60_000), error: null }), NOW)).toBe(false);
   });
 });
