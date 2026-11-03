@@ -9,6 +9,7 @@ import { GeneratedImage } from "./generated-image";
 import { GeneratedVideo } from "./generated-video";
 import { libraryName } from "@/hooks/use-composer-attachments";
 import { exactCredits, formatCredits } from "@/lib/credits";
+import { formatDurationMs } from "@/lib/durations";
 import type { PendingSend } from "@/stores/pending-sends";
 
 type AttachmentChip = { id: string; name: string; kind: "image" | "video" };
@@ -135,8 +136,75 @@ function segments(message: MessageResponse): Segment[] {
 /** Live view of the in-flight assistant message (transport only). */
 export type LiveTurn = { text: LiveText | null };
 
-function formatSeconds(ms: number): string {
-  return `${Math.max(1, Math.round(ms / 1000))}s`;
+/** Past-tense labels for a finished tool call (execution history, never content). */
+const DONE_TOOL_LABELS: Record<string, string> = {
+  generate_image: "Generated image",
+  edit_image: "Edited image",
+  crop_image: "Cropped image",
+  merge_videos: "Merged videos",
+  load_skill: "Loaded skill",
+  read_skill_asset: "Read skill guide",
+};
+
+type ToolStep = { key: string; label: string; outcome: "done" | "failed" | "stopped"; duration: string | null };
+
+/** The turn's tool calls in order, each with its measured duration (tool_result.durationMs) when known. */
+function toolSteps(message: MessageResponse): ToolStep[] {
+  const results = new Map<string, { durationMs: number | null; failed: boolean }>();
+  for (const block of message.content) {
+    if (block.type === "tool_result") results.set(block.toolInvocationId, { durationMs: block.durationMs, failed: !!block.error });
+  }
+  return message.content.flatMap((block): ToolStep[] => {
+    if (block.type !== "tool_use") return [];
+    const result = results.get(block.toolInvocationId);
+    const outcome =
+      block.status === "FAILED" || result?.failed ? "failed" : block.status === "COMPLETED" ? "done" : "stopped";
+    return [
+      {
+        key: block.toolInvocationId,
+        label: DONE_TOOL_LABELS[block.toolName] ?? `Ran ${block.toolName}`,
+        outcome,
+        duration: formatDurationMs(result?.durationMs),
+      },
+    ];
+  });
+}
+
+/**
+ * A finished assistant turn's execution details, shown above its answer:
+ * model thinking time ("Thought for", OpenRouter time to first output only),
+ * the whole turn's measured duration ("Took", run admission → completion,
+ * which includes tool calls such as a multi-minute merge), and each tool call
+ * with its own measured duration. Only measured values from the server are
+ * shown; a missing or invalid one is omitted, never estimated.
+ */
+function RunSummary({ message }: { message: MessageResponse }) {
+  const thought = message.thinkingMs !== null && message.thinkingMs > 0 ? formatDurationMs(message.thinkingMs) : null;
+  const took = formatDurationMs(message.runDurationMs);
+  const steps = toolSteps(message);
+  if (!thought && !took && steps.length === 0) return null;
+  return (
+    <div data-run-summary="" className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+      {(thought || took) && (
+        <p className="flex flex-wrap items-center gap-1.5 tabular-nums">
+          {thought && <span>Thought for {thought}</span>}
+          {thought && took && <span aria-hidden="true">·</span>}
+          {took && <span>Took {took}</span>}
+        </p>
+      )}
+      {steps.length > 0 && (
+        <ul aria-label="Steps" className="flex flex-col gap-0.5">
+          {steps.map((step) => (
+            <li key={step.key} data-tool-step={step.outcome} className="tabular-nums">
+              {step.label}
+              {step.outcome === "failed" ? " — failed" : step.outcome === "stopped" ? " — not finished" : ""}
+              {step.duration && ` · ${step.duration}`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Why a turn ended early, and what to do next — from the run's safe reason. */
@@ -214,8 +282,9 @@ function Segments({ parts }: { parts: Segment[] }) {
  * persisted (partial text is flushed while streaming); persisted images
  * follow. Once the message is terminal, only persisted state is shown.
  *
- * No status text here: the run's single status line (RunStatusIndicator)
- * says what is happening. An empty bubble shows a silent placeholder.
+ * No status text of its own: the run's single status line
+ * (RunStatusIndicatorView) is placed at the top of this bubble by
+ * MessageList. An empty bubble shows a silent placeholder.
  */
 function PendingBody({ message, parts, live }: { message: MessageResponse; parts: Segment[]; live?: LiveTurn }) {
   // Leading whitespace is trimmed, as it is in the persisted copy.
@@ -243,7 +312,7 @@ function PendingBody({ message, parts, live }: { message: MessageResponse; parts
   );
 }
 
-function MessageBubble({ message, live }: { message: MessageResponse; live?: LiveTurn }) {
+function MessageBubble({ message, live, status }: { message: MessageResponse; live?: LiveTurn; status?: React.ReactNode }) {
   const isUser = message.role === "USER";
   const parts = segments(message);
 
@@ -291,10 +360,10 @@ function MessageBubble({ message, live }: { message: MessageResponse; live?: Liv
           isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
         )}
       >
-        {/* Timing only — reasoning content is never shown. */}
-        {!isUser && !isInProgress(message) && message.thinkingMs !== null && message.thinkingMs > 0 && (
-          <span className="text-xs text-muted-foreground">Thought for {formatSeconds(message.thinkingMs)}</span>
-        )}
+        {/* Execution first, then the answer: live status while in progress, the
+            measured execution details once finished. Timing only — reasoning
+            content is never shown. */}
+        {!isUser && (isInProgress(message) ? status : <RunSummary message={message} />)}
         {/* Generated assets render inline from their tool result, not as chips. */}
         {/* A user message lists everything it sent (uploads and media-library picks, in order). */}
         <SentAttachments
@@ -321,23 +390,56 @@ function PendingSendBubble({ send }: { send: PendingSend }) {
   );
 }
 
+/** The active run's status line and the run it belongs to. */
+export type RunStatusSlot = { runId: string; node: React.ReactNode };
+
+/**
+ * Where the active run's status goes, so progress always reads before the
+ * answer it leads to:
+ * - at the top of that run's in-progress assistant message;
+ * - before the run has its assistant message (queued, first model call), as
+ *   its own assistant-side row after the latest message;
+ * - nowhere once that run's message has finished (the run may still be
+ *   wrapping up, e.g. settling credits): a status under a finished answer
+ *   would misreport what is happening.
+ */
+function statusPlacement(messages: MessageResponse[], runStatus: RunStatusSlot | null | undefined) {
+  if (!runStatus) return { inBubble: null, trailing: false };
+  const own = messages.findLast((m) => m.role === "ASSISTANT" && m.agentRunId === runStatus.runId);
+  if (!own) return { inBubble: null, trailing: true };
+  return { inBubble: isInProgress(own) ? own.id : null, trailing: false };
+}
+
 export function MessageList({
   messages,
   live,
   pending = [],
+  runStatus,
 }: {
   messages: MessageResponse[];
   live?: LiveTurn;
   pending?: PendingSend[];
+  runStatus?: RunStatusSlot | null;
 }) {
+  const placement = statusPlacement(messages, runStatus);
   return (
     <div className="flex flex-col gap-3 py-2" role="log" aria-live="polite">
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} live={isInProgress(message) ? live : undefined} />
+        <MessageBubble
+          key={message.id}
+          message={message}
+          live={isInProgress(message) ? live : undefined}
+          status={placement.inBubble === message.id ? runStatus?.node : undefined}
+        />
       ))}
       {pending.map((send) => (
         <PendingSendBubble key={send.localId} send={send} />
       ))}
+      {placement.trailing && runStatus && (
+        <div data-role="ASSISTANT" data-run-status-row="" className="flex w-full justify-start">
+          <div className="flex max-w-[75%] min-w-0 rounded-2xl bg-muted px-3.5 py-2">{runStatus.node}</div>
+        </div>
+      )}
     </div>
   );
 }

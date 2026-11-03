@@ -51,6 +51,7 @@ function makeMessage(overrides: Partial<MessageResponse> = {}): MessageResponse 
     content: [{ type: "text", text: "hello" }],
     attachments: [],
     thinkingMs: null,
+    runDurationMs: null,
     error: null,
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -170,5 +171,41 @@ describe("ConversationView", () => {
     await user.type(screen.getByLabelText("Message"), "do this instead");
     await user.click(send);
     await waitFor(() => expect(sentBody).toEqual({ text: "do this instead", attachmentIds: [], planMode: false, interruptRunId: runId }));
+  });
+
+  it("the active run's status (with Stop) sits in the conversation, above that run's in-progress answer", async () => {
+    const chatId = randomUUID();
+    const runId = randomUUID();
+    const now = new Date().toISOString();
+    server.use(
+      http.get(`${API}/api/v1/chats/${chatId}/runs/${runId}/realtime-token`, () =>
+        HttpResponse.json({ ok: true, data: { token: "tok_fake" } }),
+      ),
+      http.get(`${API}/api/v1/chats/${chatId}/messages`, () =>
+        okMessages([
+          makeMessage({ chatId, content: [{ type: "text", text: "merge these" }] }),
+          makeMessage({ chatId, role: "ASSISTANT", agentRunId: runId, status: "PENDING", content: [{ type: "text", text: "Working on it." }] }),
+        ]),
+      ),
+      http.get(`${API}/api/v1/chats/${chatId}/runs/active`, () =>
+        HttpResponse.json({
+          ok: true,
+          data: {
+            id: runId, chatId, status: "RUNNING", waitingReason: null, model: null, promptTokens: null,
+            completionTokens: null, turnCount: 1, planMode: false, errorCode: null, errorMessage: null,
+            startedAt: now, completedAt: null, createdAt: now, updatedAt: now, triggerRunId: `run_${randomUUID()}`,
+          },
+        }),
+      ),
+    );
+
+    render(<ConversationView chatId={chatId} />, { wrapper: createWrapper() });
+    const stop = await screen.findByRole("button", { name: "Stop" });
+    const log = screen.getByRole("log");
+    expect(log).toContainElement(stop);
+    const status = screen.getByRole("status");
+    expect(log).toContainElement(status);
+    const answer = screen.getByText("Working on it.");
+    expect(status.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

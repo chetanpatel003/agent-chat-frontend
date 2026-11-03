@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRunActivity, useCancelRun, type RunActivity } from "@/hooks/use-run-activity";
+import { formatElapsed } from "@/lib/durations";
 
 /** Whole seconds since an ISO timestamp, ticking once a second. */
 export function useElapsedSeconds(since: string | null): number {
@@ -16,11 +17,7 @@ export function useElapsedSeconds(since: string | null): number {
   return since ? Math.max(0, Math.floor((now - Date.parse(since)) / 1000)) : 0;
 }
 
-/** "42s", "3m 05s". */
-export function formatElapsed(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
-}
+export { formatElapsed } from "@/lib/durations";
 
 /** Stage labels for known tools: while starting/running, and once the provider has the job. */
 const TOOL_LABELS: Record<string, { running: string; providerWaiting: string }> = {
@@ -41,9 +38,9 @@ function toolLabel(toolName: string, phase: "running" | "provider_waiting"): str
 /**
  * The one active-status line for the current run: thinking → tool stage
  * (with the whole call's elapsed time) → writing → waiting for approval →
- * stopping. Labels and timing only — never content. The message itself
- * (including streamed text) is rendered by MessageList, which shows no
- * status text of its own.
+ * stopping. Labels and timing only — never content. ConversationView hands
+ * it to MessageList, which places it before the run's answer (top of the
+ * in-progress assistant message, or its own row while queued).
  */
 export function statusOf(
   activity: Pick<RunActivity, "liveStatus" | "currentStep">,
@@ -78,7 +75,7 @@ export function RunStatusIndicatorView({ chatId, activity }: { chatId: string; a
   if (!isActive || !activeRun) return null;
 
   return (
-    <div className="flex items-center gap-2 border-t bg-muted/40 px-3 py-1.5 text-sm text-muted-foreground">
+    <div data-run-status="" className="flex w-full min-w-0 items-center gap-2 text-sm text-muted-foreground">
       <span className="flex items-center gap-1.5" role="status" aria-live="polite">
         <span className="size-1.5 animate-pulse rounded-full bg-current" aria-hidden="true" />
         {status.label}

@@ -15,6 +15,7 @@ function makeMessage(overrides: Partial<MessageResponse> = {}): MessageResponse 
     content: [{ type: "text", text: "hello" }],
     attachments: [],
     thinkingMs: null,
+    runDurationMs: null,
     error: null,
     createdAt: new Date().toISOString(),
     ...overrides,
