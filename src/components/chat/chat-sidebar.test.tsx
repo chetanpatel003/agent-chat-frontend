@@ -11,7 +11,7 @@ const push = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 import { useAuth } from "@clerk/nextjs";
-import { createWrapper } from "@/test-utils/query-wrapper";
+import { createTestQueryClient, createWrapper } from "@/test-utils/query-wrapper";
 import { ChatSidebar } from "./chat-sidebar";
 import type { ChatResponse } from "@/lib/api/contracts";
 
@@ -94,7 +94,26 @@ describe("ChatSidebar", () => {
     );
 
     render(<ChatSidebar selectedChatId={undefined} />, { wrapper: createWrapper() });
-    expect(await screen.findByText("Untitled chat")).toBeInTheDocument();
+    // The chat's own link (the sidebar's create button is also labelled "New chat").
+    expect(await screen.findByRole("link", { name: "New chat" })).toHaveAttribute("href", `/chat/${chat.id}`);
+  });
+
+  it("shows a generated title once the chat list is refreshed (as after the first reply)", async () => {
+    const chat = makeChat({ title: null });
+    let title: string | null = null;
+    server.use(
+      http.get(`${API}/api/v1/chats`, () =>
+        HttpResponse.json({ ok: true, data: { items: [{ ...chat, title }], nextCursor: null, hasMore: false } }),
+      ),
+    );
+    const queryClient = createTestQueryClient();
+    render(<ChatSidebar selectedChatId={undefined} />, { wrapper: createWrapper(queryClient) });
+    expect(await screen.findByRole("link", { name: "New chat" })).toBeInTheDocument();
+
+    title = "Birthday Party Planning";
+    await queryClient.invalidateQueries({ queryKey: ["chats"] });
+    expect(await screen.findByRole("link", { name: "Birthday Party Planning" })).toHaveAttribute("href", `/chat/${chat.id}`);
+    expect(screen.queryByRole("link", { name: "New chat" })).not.toBeInTheDocument();
   });
 
   it("creating a chat navigates to the newly created chat", async () => {

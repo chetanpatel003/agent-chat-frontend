@@ -326,6 +326,31 @@ describe("useRunActivity — event processing", () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ["credits", "balance"] });
   });
 
+  it("refreshes the chat list (for a newly generated title) when the reply lands and when the run ends", async () => {
+    const chatId = randomUUID();
+    const run = makeRun({ chatId });
+    const queryClient = createTestQueryClient();
+    const spy = vi.spyOn(queryClient, "invalidateQueries");
+    serveActive(chatId, () => run);
+    mockUseRealtimeRun.mockReturnValue(
+      realtime([runEvent(run.id, { type: "assistant_message", seq: 1, messageId: randomUUID(), status: "COMPLETE" })]),
+    );
+    const { rerender } = renderHook(() => useRunActivity(chatId), { wrapper: createWrapper(queryClient) });
+    await waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: ["chats"] }));
+    const afterReply = spy.mock.calls.filter(([a]) => JSON.stringify(a) === JSON.stringify({ queryKey: ["chats"] })).length;
+
+    mockUseRealtimeRun.mockReturnValue(
+      realtime([
+        runEvent(run.id, { type: "assistant_message", seq: 1, messageId: randomUUID(), status: "COMPLETE" }),
+        status(run.id, 2, "COMPLETED"),
+      ]),
+    );
+    rerender();
+    await waitFor(() =>
+      expect(spy.mock.calls.filter(([a]) => JSON.stringify(a) === JSON.stringify({ queryKey: ["chats"] })).length).toBeGreaterThan(afterReply),
+    );
+  });
+
   it("refreshes the credit balance after a tool call finishes (billable calls settle there)", async () => {
     const chatId = randomUUID();
     const run = makeRun({ chatId });

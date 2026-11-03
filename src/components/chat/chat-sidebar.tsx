@@ -29,7 +29,7 @@ function ChatRow({ chat, selected }: { chat: ChatResponse; selected: boolean }) 
         aria-current={selected ? "page" : undefined}
         className="flex-1 truncate text-sm"
       >
-        {chat.title ?? "Untitled chat"}
+        {chat.title ?? "New chat"}
       </Link>
       <button
         type="button"

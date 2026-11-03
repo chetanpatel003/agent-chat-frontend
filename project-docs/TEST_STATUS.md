@@ -103,3 +103,9 @@ images) plus that an ordinary link stays text.
   none); per-index mixing; other invocations' copies ignored; crop from canonical/legacy shapes;
   recovered COMPLETE message shows the result with no "interrupted".
 - `late-settlement.test.ts` (+2): refresh an ended pending turn within 45 min only.
+
+
+## Automatic chat titles (2026-11-04) — 176/176 (21 files)
+- `chat-sidebar.test.tsx`: untitled chats show "New chat" (asserted on the chat's link, since the
+  create button shares the label); a generated title replaces it after the chat list refreshes.
+- `use-run-activity.test.tsx`: the chat list is refreshed when the reply lands and when the run ends.
