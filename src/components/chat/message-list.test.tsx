@@ -371,7 +371,8 @@ describe("MessageList — generated images", () => {
     );
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.getByText("See")).toBeInTheDocument();
-    expect(screen.getByText("Also https://example.com/a.png")).toBeInTheDocument();
+    // Markdown may make it a link, never an image.
+    expect(screen.getByRole("log")).toHaveTextContent("Also https://example.com/a.png");
   });
 
   it("renders text-only messages unchanged", () => {
@@ -516,7 +517,7 @@ describe("MessageList — media URLs never appear as assistant prose", () => {
         ]}
       />,
     );
-    expect(screen.getByText("See https://en.wikipedia.org/wiki/Gurgaon for background.")).toBeInTheDocument();
+    expect(screen.getByRole("log")).toHaveTextContent("See https://en.wikipedia.org/wiki/Gurgaon for background.");
     expect(screen.getByText(`crop ${URL_A}`)).toBeInTheDocument();
   });
 
@@ -639,7 +640,9 @@ describe("MessageList — credit usage presentation", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/Here's the new image of the sunset\./)).toHaveTextContent("Let me know if you'd like changes!");
+    // Two Markdown paragraphs; both kept, the credit sentence removed.
+    expect(screen.getByText(/Here's the new image of the sunset\./)).toBeInTheDocument();
+    expect(screen.getByText(/Let me know if you'd like changes!/)).toBeInTheDocument();
     expect(screen.queryByText(/273936/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/credits charged/)).toHaveLength(1); // only the app's indicator
   });

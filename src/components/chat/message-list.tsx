@@ -7,6 +7,7 @@ import { IMAGE_TOOLS, VIDEO_TOOLS } from "@/lib/media-tools";
 import type { LiveText } from "@/hooks/use-run-activity";
 import { GeneratedImage } from "./generated-image";
 import { GeneratedVideo } from "./generated-video";
+import { AssistantMarkdown } from "./assistant-markdown";
 import { libraryName } from "@/hooks/use-composer-attachments";
 import { exactCredits, formatCredits } from "@/lib/credits";
 import { formatDurationMs } from "@/lib/durations";
@@ -244,12 +245,17 @@ function CreditUsage({ credits }: { credits: number | null }) {
   );
 }
 
-function Segments({ parts }: { parts: Segment[] }) {
+/** Assistant prose is Markdown (one renderer for every state); a user's own text stays as typed. */
+function Segments({ parts, markdown }: { parts: Segment[]; markdown: boolean }) {
   return parts.map((part) =>
     part.kind === "text" ? (
-      <div key={part.key} className="whitespace-pre-wrap">
-        {part.text}
-      </div>
+      markdown ? (
+        <AssistantMarkdown key={part.key} text={part.text} />
+      ) : (
+        <div key={part.key} className="whitespace-pre-wrap">
+          {part.text}
+        </div>
+      )
     ) : part.kind === "videos" ? (
       <div key={part.key} className="flex flex-col gap-2">
         {part.urls.map((url, i) => (
@@ -286,7 +292,18 @@ function Segments({ parts }: { parts: Segment[] }) {
  * (RunStatusIndicatorView) is placed at the top of this bubble by
  * MessageList. An empty bubble shows a silent placeholder.
  */
-function PendingBody({ message, parts, live }: { message: MessageResponse; parts: Segment[]; live?: LiveTurn }) {
+function PendingBody({
+  message,
+  parts,
+  live,
+  hasStatus,
+}: {
+  message: MessageResponse;
+  parts: Segment[];
+  live?: LiveTurn;
+  /** The run's status line is already shown at the top of this bubble. */
+  hasStatus: boolean;
+}) {
   // Leading whitespace is trimmed, as it is in the persisted copy.
   const streamed =
     live?.text?.messageId === message.id
@@ -298,7 +315,9 @@ function PendingBody({ message, parts, live }: { message: MessageResponse; parts
         ...parts.filter((p) => p.kind !== "text"),
       ]
     : parts;
-  if (shown.length > 0) return <Segments parts={shown} />;
+  if (shown.length > 0) return <Segments parts={shown} markdown />;
+  // One indicator only: with the status line above, an empty body adds nothing.
+  if (hasStatus) return null;
   return (
     <span data-pending-placeholder="" aria-hidden="true" className="flex h-5 items-center gap-1">
       {[0, 150, 300].map((delay) => (
@@ -315,38 +334,43 @@ function PendingBody({ message, parts, live }: { message: MessageResponse; parts
 function MessageBubble({ message, live, status }: { message: MessageResponse; live?: LiveTurn; status?: React.ReactNode }) {
   const isUser = message.role === "USER";
   const parts = segments(message);
+  const markdown = !isUser;
 
+  // Execution first, then the answer: an ended turn's outcome (interrupted,
+  // failed, stopped) sits with its execution details above whatever partial
+  // output it kept — never trailing after the content, where it reads as
+  // part of the answer. Partial output is always kept.
+  let outcome: React.ReactNode = null;
   let body: React.ReactNode;
   if (message.error?.code === RUN_INTERRUPTED) {
-    // Whatever was produced is kept, but it is never presented as a finished
-    // answer, and an empty turn is an error state — not an endless "Thinking…".
-    body = (
-      <>
-        {parts.length > 0 && <Segments parts={parts} />}
-        <div role="status" className="flex flex-col gap-0.5 border-t border-destructive/30 pt-2">
-          <span className="font-medium text-destructive">Response interrupted</span>
-          <span className="text-muted-foreground">The execution stopped unexpectedly. Send a new message to continue.</span>
-        </div>
-      </>
+    // Never presented as a finished answer, and an empty turn is an error
+    // state — not an endless "Thinking…".
+    outcome = (
+      <div role="status" data-outcome="interrupted" className="flex flex-col gap-0.5 border-b border-destructive/30 pb-2">
+        <span className="font-medium text-destructive">Response interrupted</span>
+        <span className="text-muted-foreground">The execution stopped unexpectedly. Send a new message to continue.</span>
+      </div>
     );
+    body = parts.length > 0 ? <Segments parts={parts} markdown={markdown} /> : null;
   } else if (isInProgress(message)) {
-    body = <PendingBody message={message} parts={parts} live={live} />;
+    body = <PendingBody message={message} parts={parts} live={live} hasStatus={!!status} />;
   } else if (message.status === "PENDING" || message.status === "FAILED" || message.status === "CANCELLED") {
-    // FAILED/CANCELLED, or PENDING whose run has ended (e.g. an ambiguous
-    // outcome): partial output (streamed text, tool results) is shown.
-    // Partial output (streamed text, tool results) is preserved and shown.
-    body = (
-      <>
-        {parts.length > 0 && <Segments parts={parts} />}
-        <span className={cn(message.status === "CANCELLED" ? "text-muted-foreground italic" : "text-destructive")}>
-          {endedReason(message)}
-        </span>
-      </>
+    // FAILED/CANCELLED, or PENDING whose run has ended (e.g. an ambiguous outcome).
+    const cancelled = message.status === "CANCELLED";
+    outcome = (
+      <p
+        role="status"
+        data-outcome={cancelled ? "stopped" : "failed"}
+        className={cn(cancelled ? "text-muted-foreground italic" : "text-destructive")}
+      >
+        {endedReason(message)}
+      </p>
     );
+    body = parts.length > 0 ? <Segments parts={parts} markdown={markdown} /> : null;
   } else if (parts.length === 0) {
     body = <span className="text-muted-foreground italic">(no text content)</span>;
   } else {
-    body = <Segments parts={parts} />;
+    body = <Segments parts={parts} markdown={markdown} />;
   }
 
   return (
@@ -364,6 +388,7 @@ function MessageBubble({ message, live, status }: { message: MessageResponse; li
             measured execution details once finished. Timing only — reasoning
             content is never shown. */}
         {!isUser && (isInProgress(message) ? status : <RunSummary message={message} />)}
+        {outcome}
         {/* Generated assets render inline from their tool result, not as chips. */}
         {/* A user message lists everything it sent (uploads and media-library picks, in order). */}
         <SentAttachments

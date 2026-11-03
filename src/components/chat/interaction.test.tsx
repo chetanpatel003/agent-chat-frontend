@@ -95,7 +95,8 @@ describe("MessageList — streaming bubble and turn outcomes", () => {
         live={{ text: { messageId: pending.id, rounds: ["1. Plan", "Done so f"] }}}
       />,
     );
-    expect(screen.getByText("1. Plan")).toBeInTheDocument();
+    // Rendered as Markdown: "1. Plan" is an ordered-list item.
+    expect(screen.getByRole("listitem")).toHaveTextContent("Plan");
     expect(screen.getByText("Done so f")).toBeInTheDocument();
     expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
   });
@@ -173,7 +174,7 @@ describe("MessageList — interrupted runs (RUN_INTERRUPTED)", () => {
         live={{ text: { messageId: pending.id, rounds: ["stale stream"] }}}
       />,
     );
-    expect(screen.getByText("1. The plan")).toBeInTheDocument();
+    expect(screen.getByRole("listitem")).toHaveTextContent("The plan");
     expect(screen.getByText("Response interrupted")).toBeInTheDocument();
     expect(screen.getByText("The execution stopped unexpectedly. Send a new message to continue.")).toBeInTheDocument();
     expect(screen.queryByText(/Thinking/)).not.toBeInTheDocument();
