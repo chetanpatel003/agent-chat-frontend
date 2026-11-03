@@ -52,11 +52,20 @@ const AssistantMessageEventSchema = z.strictObject({
   status: MessageStatusSchema,
 });
 
+/** A tool's user-facing name and activity label (src/tools/display.ts). Labels only. */
+export const ToolDisplaySchema = z.strictObject({
+  name: z.string().min(1).max(60),
+  activity: z.string().min(1).max(80),
+});
+export type ToolDisplay = z.infer<typeof ToolDisplaySchema>;
+
 const ToolStartedEventSchema = z.strictObject({
   type: z.literal("tool_started"),
   ...BaseEventFields,
   toolInvocationId: z.uuid(),
   toolName: z.string(),
+  /** Optional for events published before display labels existed. */
+  display: ToolDisplaySchema.optional(),
 });
 
 const ToolCompletedEventSchema = z.strictObject({
@@ -76,10 +85,17 @@ const ToolFailedEventSchema = z.strictObject({
   errorCode: z.string().optional(),
 });
 
-/** A long-running tool's progress (labels only). `provider_waiting`: the
- * provider accepted the job (its run id is persisted) and we are now
- * waiting for its result. */
-export const ToolProgressPhaseSchema = z.enum(["provider_waiting"]);
+/**
+ * A tool call's lifecycle after `tool_started` ("Calling {name}…" — the
+ * request is being prepared and dispatched), each phase emitted when it
+ * actually begins (labels only):
+ * - `provider_waiting`: the external provider accepted the job (its run id
+ *   is persisted); the tool's own activity is under way ("{activity}…").
+ * - `receiving`: the tool returned; its result is being checked.
+ * - `saving`: a successful result is being persisted.
+ * Then `tool_completed` / `tool_failed`.
+ */
+export const ToolProgressPhaseSchema = z.enum(["provider_waiting", "receiving", "saving"]);
 export type ToolProgressPhase = z.infer<typeof ToolProgressPhaseSchema>;
 
 const ToolProgressEventSchema = z.strictObject({

@@ -397,7 +397,7 @@ describe("useRunActivity — no stale active indicator", () => {
     mockUseRealtimeRun.mockReturnValue(realtime([status(run.id, 1, "RUNNING"), tool(run.id, 2, "tool_started", "generate_image")]));
     const { result } = renderHook(() => useRunActivity(chatId), { wrapper: createWrapper(createTestQueryClient()) });
     await waitFor(() => expect(result.current.isActive).toBe(true));
-    expect(result.current.currentStep).toMatchObject({ kind: "tool", toolName: "generate_image", phase: "running" });
+    expect(result.current.currentStep).toMatchObject({ kind: "tool", tools: [{ toolName: "generate_image", phase: "calling" }] });
   });
 });
 

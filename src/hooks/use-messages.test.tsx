@@ -43,6 +43,7 @@ function makeMessage(text: string) {
     attachments: [],
     thinkingMs: null,
     runDurationMs: null,
+    runQueueMs: null,
     error: null,
     createdAt: now,
   };

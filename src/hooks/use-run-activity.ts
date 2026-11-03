@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { z } from "zod";
 import { useAuth } from "@clerk/nextjs";
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRealtimeRunWithStreams } from "@trigger.dev/react-hooks";
@@ -12,11 +11,25 @@ import {
   TextStreamPartSchema,
   type PlanResolution,
   type RunEvent,
+  type ToolDisplay,
+  type ToolProgressPhase,
 } from "@/lib/api/contracts";
 
 import { CREDIT_BALANCE_KEY } from "./use-credits";
+import { fallbackToolDisplay } from "@/lib/tool-display";
 
-const RunEventsSchema = z.array(RunEventSchema);
+/**
+ * Each event is validated on its own: one malformed or unknown event (e.g.
+ * from a newer server during a deploy) is dropped instead of discarding the
+ * whole history and blanking the status line.
+ */
+export function parseRunEvents(raw: unknown): RunEvent[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((e) => {
+    const parsed = RunEventSchema.safeParse(e);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 const NON_TERMINAL_STATUSES = new Set(["QUEUED", "RUNNING", "WAITING"]);
 
@@ -104,10 +117,10 @@ export function useRunActivity(chatId: string | undefined) {
   // metadata.events arrives as the FULL accumulated array on every push,
   // and `seq` is unique per AgentRun across retry attempts. Identity
   // (dedup) and ordering (latest state) are handled separately below.
-  const events = useMemo(() => {
-    const parsed = RunEventsSchema.safeParse(run?.metadata?.events ?? []);
-    return parsed.success ? parsed.data.filter((e) => e.runId === agentRunId) : [];
-  }, [run?.metadata?.events, agentRunId]);
+  const events = useMemo(
+    () => parseRunEvents(run?.metadata?.events ?? []).filter((e) => e.runId === agentRunId),
+    [run?.metadata?.events, agentRunId],
+  );
 
   // Dedup: the set of seqs already acted on, scoped to one run. A late,
   // lower-seq event is still processed once; nothing is processed twice.
@@ -219,49 +232,76 @@ export function useRunActivity(chatId: string | undefined) {
 
 export type RunActivity = ReturnType<typeof useRunActivity>;
 
+/** A tool call's live phase: `calling` until the tool reports otherwise (see contracts/run-event.ts). */
+export type ToolPhase = "calling" | ToolProgressPhase;
+
+/** One tool call in flight. */
+export type ActiveTool = {
+  toolInvocationId: string;
+  toolName: string;
+  /** Backend-provided name and activity label (falls back to one derived from the tool name). */
+  display: ToolDisplay;
+  phase: ToolPhase;
+  /** When this tool call started (elapsed time counts the whole call). */
+  since: string;
+};
+
 /** What the agent is doing now — labels and timing only, never content. */
 export type CurrentStep =
-  | { kind: "thinking" | "responding" | "waiting" | "working"; since: string }
-  | {
-      kind: "tool";
-      toolName: string;
-      toolInvocationId: string;
-      /** "running": submitting / executing; "provider_waiting": the provider accepted the job. */
-      phase: "running" | "provider_waiting";
-      /** When this tool call started (elapsed time counts the whole call). */
-      since: string;
-    };
+  | { kind: "starting" | "thinking" | "responding" | "waiting" | "working"; since: string }
+  /** One or more tool calls in flight (several when non-billable calls run in parallel), in start order. */
+  | { kind: "tool"; tools: ActiveTool[]; since: string };
+
 
 /**
- * Latest (highest-seq) step or tool event decides the current step, so an
- * event delivered late (lower seq) can never bring back an older step.
+ * The current step, derived only from real events (ordered by `seq`, never
+ * by arrival or elapsed time):
+ * - Tool calls started after the latest boundary (a model step, or a
+ *   `run_status: RUNNING` that begins an execution attempt) and not yet
+ *   completed/failed are in flight, each in its latest reported phase. A
+ *   retry attempt's RUNNING is a boundary, so a call stranded by a crashed
+ *   attempt is never shown as still running.
+ * - Otherwise the latest step/tool event decides; a RUNNING run with no step
+ *   yet is "starting".
  */
 export function toCurrentStep(events: RunEvent[]): CurrentStep | null {
-  const latest = highestSeq(
-    events.filter(
-      (e) =>
-        e.type === "step" ||
-        e.type === "tool_started" ||
-        e.type === "tool_progress" ||
-        e.type === "tool_completed" ||
-        e.type === "tool_failed",
-    ),
+  const boundary = highestSeq(
+    events.filter((e) => e.type === "step" || (e.type === "run_status" && e.status === "RUNNING")),
   );
-  if (!latest) return null;
-  if (latest.type === "step") return { kind: latest.step, since: latest.at };
-  if (latest.type === "tool_started" || latest.type === "tool_progress") {
-    const started = events.find(
-      (e) => e.type === "tool_started" && e.toolInvocationId === latest.toolInvocationId,
-    );
-    return {
-      kind: "tool",
-      toolName: latest.toolName,
-      toolInvocationId: latest.toolInvocationId,
-      phase: latest.type === "tool_progress" ? latest.phase : "running",
-      since: started?.at ?? latest.at,
-    };
-  }
-  return { kind: "working", since: latest.at };
+  const boundarySeq = boundary?.seq ?? -1;
+
+  const finished = new Set(
+    events.filter((e) => e.type === "tool_completed" || e.type === "tool_failed").map((e) => e.toolInvocationId),
+  );
+  const tools: ActiveTool[] = events
+    .filter((e): e is Extract<RunEvent, { type: "tool_started" }> => e.type === "tool_started")
+    .filter((e) => e.seq > boundarySeq && !finished.has(e.toolInvocationId))
+    .sort((a, b) => a.seq - b.seq)
+    .map((started) => {
+      const progress = highestSeq(
+        events.filter(
+          (e): e is Extract<RunEvent, { type: "tool_progress" }> =>
+            e.type === "tool_progress" && e.toolInvocationId === started.toolInvocationId,
+        ),
+      );
+      return {
+        toolInvocationId: started.toolInvocationId,
+        toolName: started.toolName,
+        display: started.display ?? fallbackToolDisplay(started.toolName),
+        phase: progress?.phase ?? "calling",
+        since: started.at,
+      };
+    });
+  if (tools.length > 0) return { kind: "tool", tools, since: tools[0].since };
+
+  const latest = highestSeq(
+    events.filter((e) => e.type === "step" || e.type === "tool_started" || e.type === "tool_completed" || e.type === "tool_failed"),
+  );
+  if (latest && latest.seq > boundarySeq) return { kind: "working", since: latest.at }; // a tool just finished
+  if (latest?.type === "step" && latest.seq === boundarySeq) return { kind: latest.step, since: latest.at };
+  if (boundary?.type === "run_status") return { kind: "starting", since: boundary.at };
+  if (latest?.type === "step") return { kind: latest.step, since: latest.at };
+  return latest ? { kind: "working", since: latest.at } : null;
 }
 
 /** Streamed text for the in-flight assistant message, one entry per model round. */

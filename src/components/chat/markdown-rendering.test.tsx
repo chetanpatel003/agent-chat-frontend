@@ -21,6 +21,7 @@ function message(overrides: Partial<MessageResponse>): MessageResponse {
     attachments: [],
     thinkingMs: null,
     runDurationMs: null,
+    runQueueMs: null,
     error: null,
     createdAt: new Date().toISOString(),
     ...overrides,

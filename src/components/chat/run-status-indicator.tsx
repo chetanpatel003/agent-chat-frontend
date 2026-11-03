@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useRunActivity, useCancelRun, type RunActivity } from "@/hooks/use-run-activity";
+import { useRunActivity, useCancelRun, type ActiveTool, type RunActivity } from "@/hooks/use-run-activity";
 import { formatElapsed } from "@/lib/durations";
 
 /** Whole seconds since an ISO timestamp, ticking once a second. */
@@ -19,73 +19,110 @@ export function useElapsedSeconds(since: string | null): number {
 
 export { formatElapsed } from "@/lib/durations";
 
-/** Stage labels for known tools: while starting/running, and once the provider has the job. */
-const TOOL_LABELS: Record<string, { running: string; providerWaiting: string }> = {
-  generate_image: { running: "Generating image…", providerWaiting: "Waiting for image…" },
-  edit_image: { running: "Editing image…", providerWaiting: "Waiting for edited image…" },
-  crop_image: { running: "Cropping image…", providerWaiting: "Waiting for cropped image…" },
-  merge_videos: { running: "Merging videos…", providerWaiting: "Waiting for merged video…" },
-  load_skill: { running: "Loading skill…", providerWaiting: "Loading skill…" },
-  read_skill_asset: { running: "Reading skill guide…", providerWaiting: "Reading skill guide…" },
-};
-
-function toolLabel(toolName: string, phase: "running" | "provider_waiting"): string {
-  const labels = TOOL_LABELS[toolName];
-  if (!labels) return `Running ${toolName}…`;
-  return phase === "provider_waiting" ? labels.providerWaiting : labels.running;
+/**
+ * One tool call's label for its current phase — the same lifecycle for every
+ * tool; the wording comes from the tool's backend-provided display:
+ * "Calling {name}…" → "{activity}…" → "Receiving result from {name}…" →
+ * "Saving result from {name}…".
+ */
+export function toolPhaseLabel(tool: Pick<ActiveTool, "display" | "phase">): string {
+  const { name, activity } = tool.display;
+  switch (tool.phase) {
+    case "provider_waiting":
+      return `${activity}…`;
+    case "receiving":
+      return `Receiving result from ${name}…`;
+    case "saving":
+      return `Saving result from ${name}…`;
+    default:
+      return `Calling ${name}…`;
+  }
 }
 
+export type RunStatus = {
+  label: string;
+  /** Elapsed time counts from here (a real event or run timestamp); absent = not timed. */
+  since?: string;
+  /** Parallel tool calls: each one's own label and start. */
+  tools?: { id: string; label: string; since: string }[];
+};
+
 /**
- * The one active-status line for the current run: thinking → tool stage
- * (with the whole call's elapsed time) → writing → waiting for approval →
- * stopping. Labels and timing only — never content. ConversationView hands
- * it to MessageList, which places it before the run's answer (top of the
- * in-progress assistant message, or its own row while queued).
+ * The one active-status line for the current run, from real run state and
+ * events only: queued → starting → thinking → tool phases (per tool, with
+ * the whole call's elapsed time) → writing → waiting for approval →
+ * stopping. Labels and timing only — never content or estimated progress.
+ * ConversationView hands it to MessageList, which places it before the
+ * run's answer.
  */
 export function statusOf(
-  activity: Pick<RunActivity, "liveStatus" | "currentStep">,
+  activity: Pick<RunActivity, "liveStatus" | "currentStep"> & { activeRun?: { createdAt: string } | null },
   stopping: boolean,
-): { label: string; timed: boolean } {
+): RunStatus {
   const { liveStatus, currentStep } = activity;
-  if (stopping) return { label: "Stopping…", timed: false };
-  if (liveStatus === "WAITING" || currentStep?.kind === "waiting") return { label: "Waiting for your approval", timed: false };
-  if (liveStatus === "QUEUED") return { label: "Queued…", timed: false };
+  if (stopping) return { label: "Stopping…" };
+  if (liveStatus === "WAITING" || currentStep?.kind === "waiting") return { label: "Waiting for your approval" };
+  // Queue time counts from the run's admission (its createdAt), not a guess.
+  if (liveStatus === "QUEUED") return { label: "Queued…", since: activity.activeRun?.createdAt };
   switch (currentStep?.kind) {
     case "thinking":
-      return { label: "Thinking…", timed: true };
+      return { label: "Thinking…", since: currentStep.since };
     case "responding":
-      return { label: "Writing…", timed: false };
-    case "tool":
-      return { label: toolLabel(currentStep.toolName, currentStep.phase), timed: true };
+      return { label: "Writing…" };
+    case "tool": {
+      const tools = currentStep.tools;
+      if (tools.length === 1) return { label: toolPhaseLabel(tools[0]), since: tools[0].since };
+      return {
+        label: `Running ${tools.length} tools…`,
+        tools: tools.map((t) => ({ id: t.toolInvocationId, label: toolPhaseLabel(t), since: t.since })),
+      };
+    }
     case "working":
-      return { label: "Working…", timed: false };
+      return { label: "Working…" };
     default:
-      return { label: "Thinking…", timed: false };
+      // RUNNING with no step yet (or only the run's start): preparing the turn.
+      return { label: "Starting…" };
   }
+}
+
+function Elapsed({ since }: { since: string }) {
+  const seconds = useElapsedSeconds(since);
+  // The timer ticks every second: kept out of the live region so only stage changes are announced.
+  return (
+    <span aria-hidden="true" className="tabular-nums">
+      {formatElapsed(seconds)}
+    </span>
+  );
 }
 
 export function RunStatusIndicatorView({ chatId, activity }: { chatId: string; activity: RunActivity }) {
   const cancelRun = useCancelRun(chatId);
   const [stoppedRunId, setStoppedRunId] = useState<string | null>(null);
-  const { isActive, activeRun, currentStep } = activity;
+  const { isActive, activeRun } = activity;
   const stopping = !!activeRun && (cancelRun.isPending || stoppedRunId === activeRun.id);
   const status = statusOf(activity, stopping);
-  const elapsedSeconds = useElapsedSeconds(status.timed && currentStep ? currentStep.since : null);
 
   if (!isActive || !activeRun) return null;
 
   return (
-    <div data-run-status="" className="flex w-full min-w-0 items-center gap-2 text-sm text-muted-foreground">
-      <span className="flex items-center gap-1.5" role="status" aria-live="polite">
-        <span className="size-1.5 animate-pulse rounded-full bg-current" aria-hidden="true" />
-        {status.label}
-        {/* The timer ticks every second: kept out of the live region so only stage changes are announced. */}
-        {status.timed && (
-          <span aria-hidden="true" className="tabular-nums">
-            {formatElapsed(elapsedSeconds)}
-          </span>
+    <div data-run-status="" className="flex w-full min-w-0 items-start gap-2 text-sm text-muted-foreground">
+      <div className="flex min-w-0 flex-col gap-1">
+        <span className="flex items-center gap-1.5" role="status" aria-live="polite">
+          <span className="size-1.5 animate-pulse rounded-full bg-current" aria-hidden="true" />
+          {status.label}
+          {status.since && <Elapsed since={status.since} />}
+        </span>
+        {status.tools && (
+          <ul aria-label="Running tools" className="flex flex-col gap-0.5 pl-3 text-xs">
+            {status.tools.map((t) => (
+              <li key={t.id} data-running-tool="" className="flex items-center gap-1.5">
+                {t.label}
+                <Elapsed since={t.since} />
+              </li>
+            ))}
+          </ul>
         )}
-      </span>
+      </div>
       <Button
         variant="ghost"
         size="xs"
